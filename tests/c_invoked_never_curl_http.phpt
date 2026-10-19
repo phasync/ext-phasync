@@ -53,6 +53,5 @@ proc_terminate($srv);
 ?>
 --EXPECTREGEX--
 header: B ticked during the request, inline
-write: B ticked during the request, inline
-(prereq: B ticked during the request, inline
-)?
+write: B ticked during the request, inline(
+prereq: B ticked during the request, inline)?
