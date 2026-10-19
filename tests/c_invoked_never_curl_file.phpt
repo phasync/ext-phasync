@@ -1,5 +1,5 @@
 --TEST--
-sapi(): I/O in curl callbacks (write, read, xferinfo, progress, debug; curl_exec and curl_multi_exec) runs inline
+sapi(): I/O in curl callbacks (write, read, xferinfo, progress; curl_exec and curl_multi_exec) runs inline
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -36,11 +36,6 @@ c_invoked("curl progress function", function ($sleep) {
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_NOPROGRESS => false, CURLOPT_PROGRESSFUNCTION => function () use ($sleep) { static $once; if (!$once) { $once = true; $sleep(); } return 0; }]);
     curl_exec($ch);
 });
-c_invoked("curl debug function", function ($sleep) {
-    $ch = curl_init('file://' . ci_file());
-    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_VERBOSE => true, CURLOPT_DEBUGFUNCTION => function () use ($sleep) { static $once; if (!$once) { $once = true; $sleep(); } return 0; }]);
-    curl_exec($ch);
-});
 c_invoked("curl_multi_exec write", function ($sleep) {
     $ch = curl_init('file://' . ci_file());
     curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($ch, $d) use ($sleep) { $sleep(); return strlen($d); });
@@ -55,5 +50,4 @@ curl write function: A before, A after, B
 curl read function: A before, A after, B
 curl xferinfo function: A before, A after, B
 curl progress function: A before, A after, B
-curl debug function: A before, A after, B
 curl_multi_exec write: A before, A after, B

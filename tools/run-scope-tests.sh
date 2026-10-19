@@ -12,4 +12,4 @@ cp scope/tests/*.phpt scope/tests/*.inc "$tmp/" 2>/dev/null || true
 for f in "$tmp"/*.phpt; do
 	perl -0pi -e 's/--EXTENSIONS--\nscope\n/--EXTENSIONS--\nphasync\n/' "$f"
 done
-php run-tests.php -d extension="$PWD/modules/phasync.so" "$@" "$tmp"/*.phpt
+env -u TEST_PHP_ARGS php run-tests.php -d extension="$PWD/modules/phasync.so" "$@" "$tmp"/*.phpt
