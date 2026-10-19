@@ -23,7 +23,8 @@ jobs:
   build-glibc:
     name: build ${{ matrix.php }} ${{ matrix.arch }}-glibc
     runs-on: ${{ matrix.runner }}
-    container: php:${{ matrix.php }}-cli
+    # Debian 12: the binaries then need at most glibc 2.34 (newer images pull in glibc 2.38's __isoc23_* symbols)
+    container: php:${{ matrix.php }}-cli-bookworm
     strategy:
       fail-fast: true
       matrix:
@@ -36,7 +37,7 @@ jobs:
           - { php: '8.5', runner: ubuntu-24.04-arm, arch: aarch64 }
     steps:
       - name: Install toolchain
-        run: apt-get update && apt-get install -y --no-install-recommends $PHPIZE_DEPS git libxml2-dev libsqlite3-dev
+        run: apt-get update && apt-get install -y --no-install-recommends $PHPIZE_DEPS git libxml2-dev libsqlite3-dev binutils
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build
         run: |
@@ -48,6 +49,9 @@ jobs:
           ART="phasync-${{ matrix.php }}-nts-$(uname -m)-glibc.so"
           cp modules/phasync.so "$ART"
           php -d extension="$PWD/$ART" -r 'exit(extension_loaded("phasync") ? 0 : 1);'
+          # the oldest glibc it may need: Debian 12, Ubuntu 22.04 and RHEL 9 have 2.34 or later
+          need=$(objdump -T "$ART" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          [ "$(printf '%s\nGLIBC_2.34\n' "$need" | sort -V | tail -1)" = GLIBC_2.34 ] || { echo "::error::$ART needs $need"; exit 1; }
           echo "ART=$ART" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: "${{ env.ART }}", path: "${{ env.ART }}", if-no-files-found: error }

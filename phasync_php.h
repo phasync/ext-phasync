@@ -183,6 +183,6 @@ static zend_always_inline void zend_safe_assign_to_variable_noref(zval *variable
 }
 #endif
 
-#define PHP_PHASYNC_VERSION "2.0.0"
+#define PHP_PHASYNC_VERSION "2.0.1"
 
 #endif /* PHASYNC_PHP_H */
