@@ -1,0 +1,121 @@
+/* This is a generated file, edit the .stub.php file instead.
+ * Stub hash: 1dda8bfb7220c944e13e54aaa2f6f012c89bc2f0 */
+
+/* Hand-maintained: never regenerate it with gen_stub (PHP 8.3 has no frameless
+ * infos in ZEND_RAW_FENTRY, PHASYNC_RAW_FENTRY adapts). */
+#if PHP_VERSION_ID >= 80400
+# define PHASYNC_RAW_FENTRY ZEND_RAW_FENTRY
+#else
+# define PHASYNC_RAW_FENTRY(zend_name, name, arg_info, flags, frameless_infos, doc) ZEND_RAW_FENTRY(zend_name, name, arg_info, flags)
+#endif
+
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_phasync_ext_set_preempt_function, 0, 1, Closure, 1)
+	ZEND_ARG_OBJ_INFO(0, fn, Closure, 1)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, minInterval, IS_DOUBLE, 0, "0.1")
+ZEND_END_ARG_INFO()
+
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_phasync_ext_manage, 0, 4, IS_MIXED, 0)
+	ZEND_ARG_OBJ_INFO(0, task, Closure, 0)
+	ZEND_ARG_OBJ_INFO(0, poller, phasync\\ext\\Poller, 0)
+	ZEND_ARG_OBJ_INFO(0, sleep, Closure, 0)
+	ZEND_ARG_TYPE_INFO(0, timeoutException, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+
+
+
+
+
+
+
+
+
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_phasync_ext_io_stats, 0, 0, IS_ARRAY, 0)
+ZEND_END_ARG_INFO()
+
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_phasync_ext_sapi, 0, 2, IS_MIXED, 0)
+	ZEND_ARG_OBJ_INFO(0, code, Closure, 0)
+	ZEND_ARG_TYPE_INFO(0, sapi, IS_OBJECT, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_class_phasync_ext_Poller___construct, 0, 0, 3)
+	ZEND_ARG_OBJ_INFO(0, getSlot, Closure, 0)
+	ZEND_ARG_OBJ_INFO(0, park, Closure, 0)
+	ZEND_ARG_OBJ_INFO(0, unpark, Closure, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Poller_poll, 0, 1, IS_VOID, 0)
+	ZEND_ARG_TYPE_INFO(0, maxTime, IS_DOUBLE, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Poller_readable, 0, 1, IS_VOID, 0)
+	ZEND_ARG_TYPE_INFO(0, stream, IS_MIXED, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, timeout, IS_DOUBLE, 0, "PHP_FLOAT_MAX")
+ZEND_END_ARG_INFO()
+
+#define arginfo_class_phasync_ext_Poller_writable arginfo_class_phasync_ext_Poller_readable
+
+ZEND_FUNCTION(phasync_ext_set_preempt_function);
+ZEND_FUNCTION(phasync_ext_manage);
+ZEND_FUNCTION(phasync_ext_io_stats);
+ZEND_FUNCTION(phasync_ext_sapi);
+ZEND_METHOD(phasync_ext_Poller, __construct);
+ZEND_METHOD(phasync_ext_Poller, poll);
+ZEND_METHOD(phasync_ext_Poller, readable);
+ZEND_METHOD(phasync_ext_Poller, writable);
+
+static const zend_function_entry ext_functions[] = {
+	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "set_preempt_function"), zif_phasync_ext_set_preempt_function, arginfo_phasync_ext_set_preempt_function, 0, NULL, NULL)
+	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "manage"), zif_phasync_ext_manage, arginfo_phasync_ext_manage, 0, NULL, NULL)
+	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "io_stats"), zif_phasync_ext_io_stats, arginfo_phasync_ext_io_stats, 0, NULL, NULL)
+	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "sapi"), zif_phasync_ext_sapi, arginfo_phasync_ext_sapi, 0, NULL, NULL)
+	ZEND_FE_END
+};
+
+static const zend_function_entry class_phasync_ext_Poller_methods[] = {
+	ZEND_ME(phasync_ext_Poller, __construct, arginfo_class_phasync_ext_Poller___construct, ZEND_ACC_PUBLIC)
+	ZEND_ME(phasync_ext_Poller, poll, arginfo_class_phasync_ext_Poller_poll, ZEND_ACC_PUBLIC)
+	ZEND_ME(phasync_ext_Poller, readable, arginfo_class_phasync_ext_Poller_readable, ZEND_ACC_PUBLIC)
+	ZEND_ME(phasync_ext_Poller, writable, arginfo_class_phasync_ext_Poller_writable, ZEND_ACC_PUBLIC)
+	ZEND_FE_END
+};
+
+static zend_class_entry *phasync_register_class(zend_class_entry *ce, uint32_t flags)
+{
+#if PHP_VERSION_ID >= 80400
+	return zend_register_internal_class_with_flags(ce, NULL, flags);
+#else
+	zend_class_entry *class_entry = zend_register_internal_class_ex(ce, NULL);
+	class_entry->ce_flags |= flags;
+	return class_entry;
+#endif
+}
+
+static zend_class_entry *register_class_phasync_ext_Poller(void)
+{
+	zend_class_entry ce, *class_entry;
+
+	INIT_NS_CLASS_ENTRY(ce, "phasync\\ext", "Poller", class_phasync_ext_Poller_methods);
+	class_entry = phasync_register_class(&ce, ZEND_ACC_FINAL|ZEND_ACC_NO_DYNAMIC_PROPERTIES|ZEND_ACC_NOT_SERIALIZABLE);
+
+	return class_entry;
+}
+
+static zend_class_entry *register_class_phasync_Uninterruptible(void)
+{
+	zend_class_entry ce, *class_entry;
+
+	INIT_NS_CLASS_ENTRY(ce, "phasync", "Uninterruptible", NULL);
+	class_entry = phasync_register_class(&ce, ZEND_ACC_FINAL|ZEND_ACC_NO_DYNAMIC_PROPERTIES);
+
+	zend_string *attribute_name_Attribute_class_phasync_Uninterruptible_0 = zend_string_init_interned("Attribute", sizeof("Attribute") - 1, 1);
+	zend_attribute *attribute_Attribute_class_phasync_Uninterruptible_0 = zend_add_class_attribute(class_entry, attribute_name_Attribute_class_phasync_Uninterruptible_0, 1);
+	zend_string_release(attribute_name_Attribute_class_phasync_Uninterruptible_0);
+	ZVAL_LONG(&attribute_Attribute_class_phasync_Uninterruptible_0->args[0].value, 6);
+
+	return class_entry;
+}
+

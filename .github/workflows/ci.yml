@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    # In the official PHP image: phpize, php-config and docker-php-ext-install as PHP's own build has them
+    container:
+      image: php:${{ matrix.php }}-cli
+      options: --ulimit nofile=65536:65536   # phasync's IO-7 opens 2600 descriptors (Docker's soft limit is 1024)
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4', '8.5']   # ext-phasync needs PHP 8.3+
+    # The databases' data on tmpfs: an image's VOLUME would leave an anonymous volume per run
+    services:
+      # For tests/mysqlnd_suspends.phpt (skipped when PHASYNC_TEST_MYSQL is unset).
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: test
+        options: >-
+          --tmpfs /var/lib/mysql
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=24
+      # For tests/pgsql_*.phpt (skipped when PHASYNC_TEST_PGSQL is unset).
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: test
+        options: >-
+          --tmpfs /var/lib/postgresql/data
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s --health-timeout=5s --health-retries=24
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: PHP extensions and tools
+        run: |
+          apt-get update -q && apt-get install -y -q --no-install-recommends git unzip libxml2-dev libpq-dev libsqlite3-dev postgresql-client >/dev/null
+          docker-php-ext-install -j"$(nproc)" mysqli pdo_mysql pgsql pdo_pgsql sockets pcntl sysvsem sysvmsg >/dev/null
+          curl -sS https://getcomposer.org/installer | php -- --quiet --install-dir=/usr/local/bin --filename=composer
+
+      - name: PostgreSQL over TLS (tests/pgsql_tls.phpt)
+        env: { PGPASSWORD: test }
+        run: |
+          psql -h postgres -U postgres \
+            -c "ALTER SYSTEM SET ssl_cert_file = '/etc/ssl/certs/ssl-cert-snakeoil.pem'" \
+            -c "ALTER SYSTEM SET ssl_key_file = '/etc/ssl/private/ssl-cert-snakeoil.key'" \
+            -c "ALTER SYSTEM SET ssl = on" -c "SELECT pg_reload_conf()"
+
+      - name: Build
+        run: |
+          phpize
+          ./configure --enable-phasync CFLAGS="-g -O2"
+          make -j"$(nproc)"
+
+      - name: Test
+        env:
+          NO_INTERACTION: '1'
+          REPORT_EXIT_STATUS: '1'
+          PHASYNC_TEST_MYSQL: 'mariadb:3306:root:test'
+          PHASYNC_TEST_PGSQL: 'host=postgres port=5432 user=postgres password=test'
+        run: |
+          # make test runs PHP with -n: load the shared extensions the tests use by path.
+          D=$(php-config --extension-dir); TEST_PHP_ARGS="--show-diff -j$(nproc)"
+          for e in opcache pcntl posix sockets sysvsem sysvmsg mysqlnd mysqli; do
+            n=$e; [ "$e" = opcache ] && n="zend opcache"
+            php -n -m | grep -qix "$n" && continue
+            [ -f "$D/$e.so" ] || continue
+            [ "$e" = opcache ] && TEST_PHP_ARGS="$TEST_PHP_ARGS -d zend_extension=$D/$e.so" || TEST_PHP_ARGS="$TEST_PHP_ARGS -d extension=$D/$e.so"
+          done
+          export TEST_PHP_ARGS; echo "$TEST_PHP_ARGS"
+          make test TESTS=tests/
+          ./tools/run-scope-tests.sh --show-diff
+
+      - name: Scope yields to a standalone ext-scope, either load order
+        run: ./tools/check-scope-yield.sh
+
+      - name: phasync's suite with the extension (phasync main)
+        run: |
+          git clone -q --depth 1 https://github.com/phasync/phasync.git "$RUNNER_TEMP/phasync"
+          cd "$RUNNER_TEMP/phasync"
+          composer install -q --no-interaction --no-progress
+          mkdir -p "$RUNNER_TEMP/ini" && echo "extension=$GITHUB_WORKSPACE/modules/phasync.so" > "$RUNNER_TEMP/ini/phasync.ini"
+          PHP_INI_SCAN_DIR=":$RUNNER_TEMP/ini" php -r 'exit(extension_loaded("phasync") ? 0 : 1);'
+          # RT-1 is timing-flaky on these runners, with or without the extension (phasync/phasync#90)
+          PHP_INI_SCAN_DIR=":$RUNNER_TEMP/ini" php vendor/bin/pest --exclude-filter 'RT-1: a long-lived coroutine' 
+
+      - name: Dump failing test diffs
+        if: failure()
+        run: |
+          for f in tests/*.out tests/*.diff tests/*.log; do
+            [ -f "$f" ] && { echo "===== $f ====="; cat "$f"; }
+          done || true

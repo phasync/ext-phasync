@@ -1,0 +1,44 @@
+--TEST--
+Regression: a fatal error inside park() reaps the worker thread before unwinding (no stack-lifetime hole)
+--EXTENSIONS--
+phasync
+--SKIPIF--
+<?php
+if (!class_exists('Fiber')) die('skip requires Fibers');
+if (!function_exists('posix_mkfifo') && trim((string) @shell_exec('command -v mkfifo')) === '') die('skip needs posix_mkfifo or mkfifo(1)');
+if (!is_readable('/proc/self/status')) die('skip requires /proc');
+?>
+--FILE--
+<?php
+// A FIFO open() runs on a dedicated thread holding a pointer to a task in the
+// caller's C frame. A fatal error (bailout) raised inside park() longjmps past
+// that frame; the fiber's ledger orphans the task and cancels the thread (the
+// task is the thread's to free). Observable: after the fatal, only the main
+// thread is left.
+require __DIR__ . '/loop.inc';
+$fifo = sys_get_temp_dir() . '/phasync_bail_' . getmypid();
+function_exists('posix_mkfifo') ? posix_mkfifo($fifo, 0600) : shell_exec('mkfifo ' . escapeshellarg($fifo));
+
+register_shutdown_function(function () use ($fifo) {
+    // The orphaned thread is cancelled, not waited for: give it a moment to go.
+    for ($i = 0; $i < 100; $i++) {
+        preg_match('/^Threads:\s+(\d+)/m', file_get_contents('/proc/self/status'), $m);
+        if ($m[1] == 1) break;
+        usleep(10000);
+    }
+    echo "threads=", $m[1], "\n";
+    @unlink($fifo);
+});
+
+$loop = new Loop;
+$loop->onPark = function () {
+    ini_set('memory_limit', '8M');
+    $x = str_repeat('x', 32 << 20);            // fatal error inside park()
+};
+$loop->runAll(function () use ($fifo) {
+    fopen($fifo, 'r');                         // no writer: the thread blocks in open()
+});
+?>
+--EXPECTF--
+Fatal error: Allowed memory size of %d bytes exhausted%s
+threads=1

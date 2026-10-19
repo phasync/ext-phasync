@@ -1,0 +1,180 @@
+name: Release
+
+# Builds the 18 per-ABI binaries from the commit this runs on, and publishes them with their
+# SHA256SUMS and licences as the GitHub Release of tag `version` (created at that commit).
+# PHP_PHASYNC_VERSION in phasync_php.h must equal `version`. Nothing here writes to any other
+# repository: phasync's tools/bundle-ext pulls a release's binaries into a phasync release tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Extension version (PHP_PHASYNC_VERSION in phasync_php.h), e.g. 2.0.0'
+        required: true
+      dry_run:
+        description: 'Build and check only: publish nothing'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-glibc:
+    name: build ${{ matrix.php }} ${{ matrix.arch }}-glibc
+    runs-on: ${{ matrix.runner }}
+    container: php:${{ matrix.php }}-cli
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { php: '8.3', runner: ubuntu-latest, arch: x86_64 }
+          - { php: '8.4', runner: ubuntu-latest, arch: x86_64 }
+          - { php: '8.5', runner: ubuntu-latest, arch: x86_64 }
+          - { php: '8.3', runner: ubuntu-24.04-arm, arch: aarch64 }
+          - { php: '8.4', runner: ubuntu-24.04-arm, arch: aarch64 }
+          - { php: '8.5', runner: ubuntu-24.04-arm, arch: aarch64 }
+    steps:
+      - name: Install toolchain
+        run: apt-get update && apt-get install -y --no-install-recommends $PHPIZE_DEPS git libxml2-dev libsqlite3-dev
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build
+        run: |
+          set -eux
+          phpize
+          ./configure --enable-phasync CFLAGS="-O2 -g0 -fvisibility=hidden -ffile-prefix-map=$PWD=." LDFLAGS="-Wl,--version-script=$PWD/tools/exports.map"
+          make -j"$(nproc)"
+          tools/release-strip.sh modules/phasync.so
+          ART="phasync-${{ matrix.php }}-nts-$(uname -m)-glibc.so"
+          cp modules/phasync.so "$ART"
+          php -d extension="$PWD/$ART" -r 'exit(extension_loaded("phasync") ? 0 : 1);'
+          echo "ART=$ART" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: "${{ env.ART }}", path: "${{ env.ART }}", if-no-files-found: error }
+
+  build-musl:
+    name: build ${{ matrix.php }} ${{ matrix.arch }}-musl
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { php: '8.3', runner: ubuntu-latest, arch: x86_64 }
+          - { php: '8.4', runner: ubuntu-latest, arch: x86_64 }
+          - { php: '8.5', runner: ubuntu-latest, arch: x86_64 }
+          - { php: '8.3', runner: ubuntu-24.04-arm, arch: aarch64 }
+          - { php: '8.4', runner: ubuntu-24.04-arm, arch: aarch64 }
+          - { php: '8.5', runner: ubuntu-24.04-arm, arch: aarch64 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1    # on the glibc host, so JS actions work
+      - name: Build in Alpine (musl)
+        run: |
+          set -eux
+          docker run --rm --platform "linux/$( [ "${{ matrix.arch }}" = aarch64 ] && echo arm64 || echo amd64 )" -e IDS="$(id -u):$(id -g)" -v "$PWD":/w -w /w "php:${{ matrix.php }}-cli-alpine" sh -euxc '
+            trap "chown -R $IDS /w" EXIT   # the container runs as root; later steps read /w as the runner's user
+            apk add --no-cache $PHPIZE_DEPS libxml2-dev sqlite-dev >/dev/null
+            phpize
+            ./configure --enable-phasync CFLAGS="-O2 -g0 -fvisibility=hidden -ffile-prefix-map=$PWD=." LDFLAGS="-Wl,--version-script=$PWD/tools/exports.map"
+            make -j"$(nproc)"
+            tools/release-strip.sh modules/phasync.so
+            php -d extension="$PWD/modules/phasync.so" -r "exit(extension_loaded(\"phasync\") ? 0 : 1);"
+          '
+          ART="phasync-${{ matrix.php }}-nts-$(uname -m)-musl.so"
+          cp modules/phasync.so "$ART"
+          echo "ART=$ART" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: "${{ env.ART }}", path: "${{ env.ART }}", if-no-files-found: error }
+
+  macos-tests:
+    uses: ./.github/workflows/macos.yml
+
+  build-darwin:
+    needs: macos-tests
+    name: build ${{ matrix.php }} ${{ matrix.arch }}-darwin
+    runs-on: ${{ matrix.arch == 'arm64' && 'macos-latest' || 'macos-15-intel' }}
+    strategy:
+      fail-fast: true
+      matrix:
+        php: ['8.3', '8.4', '8.5']
+        arch: [arm64, x86_64]
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with: { php-version: '${{ matrix.php }}', tools: phpize, coverage: none }
+      - name: Build
+        run: |
+          set -eux
+          for k in icu4c libxml2 pcre2; do   # Homebrew's keg-only libraries PHP's headers include
+            d="$(brew --prefix $k 2>/dev/null)/lib/pkgconfig"; [ -d "$d" ] && PKG_CONFIG_PATH="$d:${PKG_CONFIG_PATH:-}"
+          done
+          export PKG_CONFIG_PATH
+          phpize
+          ./configure --enable-phasync CFLAGS="-O2 -g0 -fvisibility=hidden -ffile-prefix-map=$PWD=." LDFLAGS="-Wl,-exported_symbols_list,$PWD/tools/exports.list"
+          make -j"$(sysctl -n hw.ncpu)"
+          tools/release-strip.sh modules/phasync.so
+          ART="phasync-${{ matrix.php }}-nts-${{ matrix.arch }}-darwin.so"
+          cp modules/phasync.so "$ART"
+          file "$ART" | grep -q "Mach-O 64-bit bundle ${{ matrix.arch }}"
+          php -d extension="$PWD/$ART" -r 'exit(extension_loaded("phasync") ? 0 : 1);'
+          echo "ART=$ART" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: "${{ env.ART }}", path: "${{ env.ART }}", if-no-files-found: error }
+
+  publish:
+    name: GitHub Release ${{ inputs.version }}
+    needs: [build-glibc, build-musl, build-darwin]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # the tag and the release
+      id-token: write       # build provenance
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Version in phasync_php.h matches the release, and is not released yet
+        env: { GH_TOKEN: "${{ github.token }}", VERSION: "${{ inputs.version }}" }
+        run: |
+          set -eu
+          v=$(sed -n 's/^#define PHP_PHASYNC_VERSION "\(.*\)"/\1/p' phasync_php.h)
+          test "$v" = "$VERSION" || { echo "::error::phasync_php.h says $v, not $VERSION: bump PHP_PHASYNC_VERSION first"; exit 1; }
+          if gh release view "$VERSION" >/dev/null 2>&1 || git ls-remote --tags origin "refs/tags/$VERSION" | grep -q .; then
+            echo "::error::$VERSION is released or tagged already"; exit 1
+          fi
+
+      - name: Collect binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { path: dist, merge-multiple: true }
+
+      - name: All 18 ABIs, each carrying the version; checksums and licences
+        working-directory: dist
+        env: { VERSION: "${{ inputs.version }}" }
+        run: |
+          set -eu
+          n=$(ls *.so | wc -l)
+          test "$n" -eq 18 || { echo "::error::expected 18 binaries, got $n"; exit 1; }
+          for f in *.so; do grep -aqF "$VERSION" "$f" || { echo "::error::$f does not carry $VERSION"; exit 1; }; done
+          cp ../LICENSE LICENSE
+          cp ../LICENSE.php-src LICENSE.php-src
+          sha256sum *.so LICENSE LICENSE.php-src > SHA256SUMS
+
+      - name: Build provenance (public repositories)
+        if: ${{ !inputs.dry_run && github.event.repository.visibility == 'public' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with: { subject-path: 'dist/*.so' }
+
+      - name: Tag and publish the release
+        if: ${{ !inputs.dry_run }}
+        env: { GH_TOKEN: "${{ github.token }}", VERSION: "${{ inputs.version }}" }
+        run: |
+          set -eu
+          pre=; case "$VERSION" in *-*) pre=--prerelease;; esac
+          gh release create "$VERSION" --target "$GITHUB_SHA" --title "$VERSION" $pre \
+            --notes "Prebuilt binaries for PHP 8.3-8.5 NTS: Linux x86_64/aarch64 (glibc, musl) and macOS arm64/x86_64. Check them with SHA256SUMS." \
+            dist/*.so dist/SHA256SUMS dist/LICENSE dist/LICENSE.php-src
+
+      - name: Keep the binaries (dry run)
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: "release-${{ inputs.version }}", path: dist }

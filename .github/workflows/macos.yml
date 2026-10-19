@@ -1,0 +1,63 @@
+name: macOS
+
+# Runs for releases (release.yml calls it, every PHP) or by hand (workflow_dispatch picks one PHP), on
+# Apple silicon. Intel is built and load-tested by release.yml only.
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      php:
+        description: 'PHP version (empty: all)'
+        default: '8.5'
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      php: ${{ steps.m.outputs.php }}
+    steps:
+      - id: m
+        run: |
+          php='${{ inputs.php }}'
+          echo "php=$( [ -n "$php" ] && echo "[\"$php\"]" || echo '["8.3","8.4","8.5"]')" >> "$GITHUB_OUTPUT"   # ext-phasync needs PHP 8.3+
+
+  build-test:
+    name: PHP ${{ matrix.php }} macOS arm64
+    needs: matrix
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ fromJSON(needs.matrix.outputs.php) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with: { php-version: '${{ matrix.php }}', tools: phpize, coverage: none }
+
+      - name: Build
+        run: |
+          # Homebrew's keg-only libraries PHP's headers include (ICU for intl).
+          for k in icu4c libxml2 pcre2; do
+            d="$(brew --prefix $k 2>/dev/null)/lib/pkgconfig"; [ -d "$d" ] && PKG_CONFIG_PATH="$d:$PKG_CONFIG_PATH"
+          done
+          export PKG_CONFIG_PATH
+          phpize
+          ./configure --enable-phasync CFLAGS="-g -O2"
+          make -j"$(sysctl -n hw.ncpu)"
+          php -d extension="$PWD/modules/phasync.so" -r 'exit(extension_loaded("phasync") ? 0 : 1);'
+
+      - name: Test
+        env:
+          NO_INTERACTION: '1'
+          REPORT_EXIT_STATUS: '1'
+          PHASYNC_TEST_COARSE_TIMERS: '1'   # a 20 ms sleep takes 50-90 ms on these VMs
+          TEST_PHP_ARGS: '--show-diff -j2'   # more starves the timer threads of CPU-spinning tests on these small VMs
+        run: make test TESTS="$( [ -f tools/macos-tests.txt ] && cat tools/macos-tests.txt || echo tests/ )"
+
+      - name: Dump failing test output
+        if: failure()
+        run: |
+          for f in tests/*.out tests/*.log; do
+            [ -f "$f" ] && { echo "===== $f ====="; head -c 4000 "$f"; }
+          done || true
