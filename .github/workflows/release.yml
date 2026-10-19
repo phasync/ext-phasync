@@ -71,7 +71,7 @@ jobs:
         run: |
           set -eux
           docker run --rm --platform "linux/$( [ "${{ matrix.arch }}" = aarch64 ] && echo arm64 || echo amd64 )" -e IDS="$(id -u):$(id -g)" -v "$PWD":/w -w /w "php:${{ matrix.php }}-cli-alpine" sh -euxc '
-            trap "chown -R $IDS /w" EXIT   # the container runs as root; later steps read /w as the runner's user
+            trap "chown -R $IDS /w" EXIT   # the container runs as root; later steps read /w as the runner user
             apk add --no-cache $PHPIZE_DEPS libxml2-dev sqlite-dev >/dev/null
             phpize
             ./configure --enable-phasync CFLAGS="-O2 -g0 -fvisibility=hidden -ffile-prefix-map=$PWD=." LDFLAGS="-Wl,--version-script=$PWD/tools/exports.map"

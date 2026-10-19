@@ -19,7 +19,7 @@ c_invoked("ZipArchive", function ($sleep) {
     $z->addFromString('a', 'x'); $z->registerProgressCallback(0.001, function () use ($sleep) { $sleep(); }); $z->close(); unlink($f);
 });
 c_invoked("FFI callback", function ($sleep) {
-    $ffi = FFI::cdef('void qsort(void *base, size_t nmemb, size_t size, int (*cmp)(const void *, const void *));', 'libc.so.6');
+    $ffi = FFI::cdef('void qsort(void *base, size_t nmemb, size_t size, int (*cmp)(const void *, const void *));');
     $a = FFI::new('int[2]'); $a[0] = 2; $a[1] = 1;
     $ffi->qsort($a, 2, 4, function ($x, $y) use ($sleep) { $sleep(); return 0; });
 });
