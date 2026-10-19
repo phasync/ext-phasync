@@ -13,7 +13,7 @@ session.save_path=
 --FILE--
 <?php require __DIR__ . '/preempt_called_from_c.inc';
 --EXPECT--
-session read handler: calls: 0
+session read handler: interrupted
 plain PHP code: interrupted
 usort comparator: calls: 0
 array_map callback: interrupted

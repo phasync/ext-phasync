@@ -1,5 +1,5 @@
 --TEST--
-sapi(): I/O in a session save handler runs inline
+sapi(): I/O in a session save handler suspends
 --EXTENSIONS--
 phasync
 session
@@ -18,4 +18,4 @@ class CiSess implements SessionHandlerInterface { public static $s;
 c_invoked("session read handler", function ($sleep) { CiSess::$s = $sleep; session_set_save_handler(new CiSess, false); session_id('abc'); session_start(); session_write_close(); });
 ?>
 --EXPECT--
-session read handler: A before, A after, B
+session read handler: A before, B, A after

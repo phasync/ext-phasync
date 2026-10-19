@@ -402,7 +402,9 @@ inside it, `echo`, output buffering, `header()`, `headers_list()`, `http_respons
 `setcookie()`, `php://input`, `request_parse_body()` and the session are that request's own, so many
 requests interleave in one worker. A request's session is written and closed the way RSHUTDOWN
 would when it returns or throws; two requests on the same session id serialise on the files
-handler's lock cooperatively instead of blocking the worker. Nothing else is isolated: statics,
+handler's lock cooperatively instead of blocking the worker. A userland session handler may
+suspend too. Concurrent requests that use sessions need `sapi()` (Swerve uses it): outside it,
+ext/session's state belongs to the whole process, whether or not the handler suspends. Nothing else is isolated: statics,
 declarations, other globals, shutdown functions and error handlers are the worker's.
 
 `sapi()` and `Scope` are independent and compose. `sapi()` does not create, enter or read a Scope. It
@@ -436,9 +438,8 @@ call `Fiber::suspend()`, and resuming the fiber continues the loop.
 
 Preemption happens only between loop iterations, and not where the callback of
 a C function or the engine may not suspend (`usort()` and kin, error and output
-handlers, autoloaders, magic property methods, serialization hooks, session
-handlers, `preg_replace_callback()`, stream wrappers beyond plain I/O ...; the
-full list, with the reason for each, is in [docs/c-to-php-suspension.md](docs/c-to-php-suspension.md)), in
+handlers, autoloaders, magic property methods, serialization hooks,
+`preg_replace_callback()`, stream wrappers beyond plain I/O ...; the full list, with the reason for each, is in [docs/c-to-php-suspension.md](docs/c-to-php-suspension.md)), in
 destructors, in exception handlers and shutdown functions, or in
 `#[\phasync\Uninterruptible]` functions and what they call. The stack is checked down to the fiber's first
 frame (outside fibers, to the script's own code).

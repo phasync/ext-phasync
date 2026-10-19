@@ -30,7 +30,6 @@ Why a list at all: PHP already has to survive a callback doing anything to userl
 | `__debugInfo`, `var_dump`, `print_r`, `debug_zval_dump`, `json_encode` | method and function names | `GC_PROTECT_RECURSION` guards on the arrays and objects dumped | none: the guards are on shared data |
 | `usort` family: `usort`, `uasort`, `uksort`, `array_u*`, `array_diff_u*`, `array_intersect_u*`, `ArrayObject/ArrayIterator::uasort/uksort` | name and prefix | `BG(user_compare_fci)` is global | swap `BG(user_compare_fci)` and `_cache` at each fiber switch |
 | user stream wrappers and filters, except `stream_open`/`stream_read`/`stream_write` under plain I/O (`fopen`, `fread`, `fwrite`, `fgets`, `file_get_contents`, `stream_get_contents` ...) | method names | `FG(user_stream_current_filename)`, `PG(in_user_include)`, per-stream state | a busy mark per stream, failing hard; swap the two globals |
-| session save handlers | module `session` | `PS(in_save_handler)` and the session state | swap `PS` per request |
 | SOAP, readline, LDAP | module | library state mid-call | a busy mark per object |
 | OpenSSL renegotiation limit callback | stream label `tcp_socket/ssl` as first argument | runs inside `SSL_read` | none |
 | FFI callbacks | internal function with `ZEND_ACC_CALL_VIA_TRAMPOLINE` | called from foreign code on its stack | none |
@@ -41,7 +40,7 @@ Why a list at all: PHP already has to survive a callback doing anything to userl
 
 ## May suspend
 
-`array_map`, `array_filter`, `array_walk`, `array_reduce`, `array_find*`, `array_any`, `array_all`, `iterator_*`, `xml_parse*`, SQLite3/PDO behind `conn_busy`, `SplHeap`/`SplPriorityQueue`, `filter_var`, `IntlChar::enum*`, `Random\Randomizer`, and engine calls at a call site: Iterator methods under `foreach`, ArrayAccess from opcodes, `__toString`, `__clone`, property hooks, destructors at free (PHP 8.4+; 8.3 forbids a fiber switch there).
+`array_map`, `array_filter`, `array_walk`, `array_reduce`, `array_find*`, `array_any`, `array_all`, `iterator_*`, `xml_parse*`, SQLite3/PDO behind `conn_busy`, `SplHeap`/`SplPriorityQueue`, `filter_var`, `IntlChar::enum*`, `Random\Randomizer`, session save handlers (`sapi()` swaps ext/session's state per request), and engine calls at a call site: Iterator methods under `foreach`, ArrayAccess from opcodes, `__toString`, `__clone`, property hooks, destructors at free (PHP 8.4+; 8.3 forbids a fiber switch there).
 
 ## Adding or removing an entry
 

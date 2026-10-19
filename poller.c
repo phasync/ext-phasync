@@ -581,7 +581,7 @@ static bool phasync_never_cfunc(const zend_function *fn)
 		"curl_exec", "curl_multi_exec", "preg_replace_callback", "preg_replace_callback_array" };
 	static const char *const prefixes[] = { "array_u", "array_diff_u", "array_intersect_u" };
 	static const char *const classes[] = { "UConverter", "XSLTProcessor", "DOMXPath", "Dom\\XPath", "ZipArchive" };
-	static const char *const modules[] = { "session", "soap", "readline", "ldap" };
+	static const char *const modules[] = { "soap", "readline", "ldap" };
 	const zend_string *name = fn->common.function_name;
 	const zend_class_entry *ce = fn->common.scope;
 	const zend_module_entry *m = fn->internal_function.module;
