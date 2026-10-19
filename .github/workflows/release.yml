@@ -111,8 +111,9 @@ jobs:
           done
           export PKG_CONFIG_PATH
           phpize
-          ./configure --enable-phasync CFLAGS="-O2 -g0 -fvisibility=hidden -ffile-prefix-map=$PWD=." LDFLAGS="-Wl,-exported_symbols_list,$PWD/tools/exports.list"
-          make -j"$(sysctl -n hw.ncpu)"
+          ./configure --enable-phasync CFLAGS="-O2 -g0 -fvisibility=hidden -ffile-prefix-map=$PWD=."
+          # at make time: in configure's LDFLAGS the export list would also apply to its test programs
+          make -j"$(sysctl -n hw.ncpu)" EXTRA_LDFLAGS="-Wl,-exported_symbols_list,$PWD/tools/exports.list"
           tools/release-strip.sh modules/phasync.so
           ART="phasync-${{ matrix.php }}-nts-${{ matrix.arch }}-darwin.so"
           cp modules/phasync.so "$ART"
