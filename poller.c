@@ -633,9 +633,40 @@ static const zval *phasync_call_arg(const zend_execute_data *ex, uint32_t i)
 	return i < oa->num_args ? ZEND_CALL_ARG(ex, i + 1) : ZEND_CALL_VAR_NUM(ex, oa->last_var + oa->T) + (i - oa->num_args);
 }
 
+/* Is zend_execute_ex overridden (pcov, xdebug, a profiler)? Without that,
+ * ZEND_CALL_TOP already means "entered from C": DO_FCALL and kin take the VM's
+ * tail-call path. With it, every user-to-user call recurses and gets flagged. */
+static bool phasync_execute_ex_overridden(void)
+{
+	return zend_execute_ex != execute_ex;
+}
+
+/* With execute_ex overridden, a ZEND_CALL_TOP frame is a real C callback only if
+ * it wasn't just an ordinary call forced to recurse by the override: prev is a
+ * real C caller unless it is user code whose current opline is the very call
+ * instruction (DO_FCALL/DO_UCALL/DO_FCALL_BY_NAME/DO_ICALL) that created ex. */
+static bool phasync_call_from_c(const zend_execute_data *prev)
+{
+	if (!phasync_execute_ex_overridden()) {
+		return true;
+	}
+	if (!prev || !prev->func || !ZEND_USER_CODE(prev->func->type) || !prev->opline) {
+		return true;
+	}
+	switch (prev->opline->opcode) {
+		case ZEND_DO_FCALL: case ZEND_DO_UCALL: case ZEND_DO_FCALL_BY_NAME: case ZEND_DO_ICALL:
+			return false;
+		default:
+			return true;
+	}
+}
+
 /* A user frame the C code (or the engine) entered: a callback that never suspends.
  * prev is the frame it was entered from; caller is that frame when it is user code
- * (an opcode), else NULL. */
+ * (an opcode), else NULL. The argument-shape checks below only mean anything when
+ * ex was genuinely entered from C: with execute_ex overridden, phasync_call_from_c()
+ * tells a real C callback apart from an ordinary call the override forced to look
+ * the same (#2). */
 static bool phasync_never_callback(const zend_execute_data *ex, const zend_execute_data *prev, const zend_execute_data *caller)
 {
 	static const char *const methods[] = { "__get", "__set", "__isset", "__unset", "__sleep", "__wakeup",
@@ -648,6 +679,7 @@ static bool phasync_never_callback(const zend_execute_data *ex, const zend_execu
 	const zend_function *fn = ex->func;
 	const zend_string *name = fn->common.function_name;
 	uint32_t argc = ZEND_CALL_NUM_ARGS(ex);
+	bool from_c = phasync_call_from_c(prev);
 
 	if (fn == PHASYNC_G(header_cb)) {
 		return true;
@@ -661,19 +693,19 @@ static bool phasync_never_callback(const zend_execute_data *ex, const zend_execu
 		}
 	}
 	/* An error handler: (int $errno, string $errstr, string $errfile, int $errline). */
-	if (argc == 4 && Z_TYPE_P(phasync_call_arg(ex, 0)) == IS_LONG && Z_TYPE_P(phasync_call_arg(ex, 1)) == IS_STRING
+	if (from_c && argc == 4 && Z_TYPE_P(phasync_call_arg(ex, 0)) == IS_LONG && Z_TYPE_P(phasync_call_arg(ex, 1)) == IS_STRING
 	 && Z_TYPE_P(phasync_call_arg(ex, 2)) == IS_STRING && Z_TYPE_P(phasync_call_arg(ex, 3)) == IS_LONG) {
 		return true;
 	}
 	/* A pcntl signal handler: (int $signo, array $siginfo), whose "signo" is $signo (PHP before 8.6 does not block fiber switches there). */
-	if (argc == 2 && Z_TYPE_P(phasync_call_arg(ex, 0)) == IS_LONG && Z_TYPE_P(phasync_call_arg(ex, 1)) == IS_ARRAY) {
+	if (from_c && argc == 2 && Z_TYPE_P(phasync_call_arg(ex, 0)) == IS_LONG && Z_TYPE_P(phasync_call_arg(ex, 1)) == IS_ARRAY) {
 		const zval *signo = zend_hash_str_find(Z_ARRVAL_P(phasync_call_arg(ex, 1)), ZEND_STRL("signo"));
 
 		if (signo && Z_TYPE_P(signo) == IS_LONG && Z_LVAL_P(signo) == Z_LVAL_P(phasync_call_arg(ex, 0))) {
 			return true;
 		}
 	}
-	if (argc >= 1) {
+	if (from_c && argc >= 1) {
 		const zval *a = phasync_call_arg(ex, 0);
 #if PHP_VERSION_ID >= 80400
 		/* The initializer of a lazy object, called with that object. */

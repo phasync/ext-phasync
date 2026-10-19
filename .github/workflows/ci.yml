@@ -84,6 +84,14 @@ jobs:
       - name: Scope yields to a standalone ext-scope, either load order
         run: ./tools/check-scope-yield.sh
 
+      - name: pcov (zend_execute_ex override) regression (#2)
+        run: |
+          pecl install -f pcov >/dev/null 2>&1 || echo "pcov unavailable for PHP ${{ matrix.php }}, skipping"
+          D=$(php-config --extension-dir)
+          if [ -f "$D/pcov.so" ]; then
+            TEST_PHP_ARGS="--show-diff -d extension=$D/pcov.so" make test TESTS="tests/c_invoked_pcov.phpt"
+          fi
+
       - name: phasync's suite with the extension (phasync main)
         run: |
           git clone -q --depth 1 https://github.com/phasync/phasync.git "$RUNNER_TEMP/phasync"
