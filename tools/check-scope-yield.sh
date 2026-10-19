@@ -8,14 +8,10 @@ cd "$(dirname "$0")/.."
 root="$PWD"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-# A plain cp would also carry over scope/scope.lo and scope/.libs/scope.o if
-# this tree's own phasync build already ran: phasync compiles scope.c as one of
-# ITS objects (COMPILE_DL_PHASYNC, no get_module), and make would then see that
-# stale object as up to date and link it into the "standalone" scope.so,
-# producing a library with no get_module ("Invalid library"). git's tracked
-# files are always the pristine source, regardless of local build leftovers.
-mkdir -p "$tmp/scope-build"
-git -C scope ls-files -z | tar -C scope --null -T - -cf - | tar -C "$tmp/scope-build" -xf -
+# Without this tree's build leftovers: phasync compiles scope.c as one of ITS objects (no
+# get_module), and make would take that object as up to date for the standalone scope.so.
+cp -r scope "$tmp/scope-build"
+find "$tmp/scope-build" \( -name '*.lo' -o -name '*.o' -o -name '*.la' -o -name .libs -o -name modules \) -prune -exec rm -rf {} +
 (cd "$tmp/scope-build" && phpize >/dev/null && ./configure >/dev/null && make -j"$(nproc)" >/dev/null)
 standalone="$tmp/scope-build/modules/scope.so"
 bundled="$root/modules/phasync.so"
