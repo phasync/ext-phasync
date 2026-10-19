@@ -2,6 +2,11 @@
 use function phasync\ext\set_preempt_function;
 
 function threads(): int { return count(scandir('/proc/self/task')) - 2; }
+// A joined thread's /proc/self/task entry can linger briefly: wait up to 200ms.
+function threadsBecome(int $want): bool {
+    for ($i = 0; threads() !== $want && $i < 200; $i++) usleep(1000);
+    return threads() === $want;
+}
 
 echo "-- none set\n";
 $base = threads();
@@ -29,7 +34,7 @@ $b = function () {};
 var_dump(set_preempt_function($b) === $a);
 var_dump(set_preempt_function(null) === $b);
 var_dump(set_preempt_function(null));
-var_dump(threads() === $base);
+var_dump(threadsBecome($base));
 $n = 0;
 $t = microtime(true);
 while (microtime(true) - $t < 0.3);
