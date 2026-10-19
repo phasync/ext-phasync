@@ -337,6 +337,7 @@ typedef struct phasync_task {
 
 static php_socket_t phasync_stream_fd(php_stream *stream);
 static bool phasync_cannot_suspend(void);
+static bool phasync_unwinding(void);
 static bool phasync_op_array_no_preempt(const zend_op_array *op_array);
 static double phasync_now(void);
 static void phasync_holds_release(void);

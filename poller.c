@@ -719,7 +719,13 @@ static bool phasync_never_suspend(const zend_execute_data *ex, bool preempt)
 {
 	const zend_execute_data *bottom = EG(active_fiber) ? EG(active_fiber)->stack_bottom : NULL;
 
-	if (zend_fiber_switch_blocked() || PHASYNC_IN_AUTOLOAD() || OG(running)) {
+	/* On PHP 8.3, zend_objects_store_del() blocks fiber switches around the
+	 * destructor call that unwinds a dropped fiber, so zend_fiber_switch_blocked()
+	 * is true there too. That must not make this a never-list C callback (whose
+	 * safe fallback is to block inline for it): a force-closed fiber's wait has
+	 * to fail outright (phasync_cannot_suspend(), checked where each caller
+	 * actually parks), not block synchronously for data that may never arrive. */
+	if ((zend_fiber_switch_blocked() && !phasync_unwinding()) || PHASYNC_IN_AUTOLOAD() || OG(running)) {
 		return true;
 	}
 	if (!preempt && ex && ex->func && !ZEND_USER_CODE(ex->func->type)) {
