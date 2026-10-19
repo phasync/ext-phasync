@@ -2209,6 +2209,27 @@ static bool phasync_call_named(const char *name, zval *retval, uint32_t argc, zv
 	return ok;
 }
 
+/* Header and body bytes the easy handle has received plus sent so far: whether
+ * the transfer moved. */
+static zend_long phasync_curl_bytes(zval *ch)
+{
+	static const char *names[] = { "CURLINFO_SIZE_DOWNLOAD_T", "CURLINFO_SIZE_UPLOAD_T", "CURLINFO_HEADER_SIZE" };
+	zend_long sum = 0;
+	zval args[2], ret, *c;
+
+	for (int i = 0; i < 3; i++) {
+		if ((c = zend_get_constant_str(names[i], strlen(names[i])))) {
+			ZVAL_COPY_VALUE(&args[0], ch);
+			ZVAL_COPY_VALUE(&args[1], c);
+			if (phasync_call_named("curl_getinfo", &ret, 2, args)) {
+				sum += zval_get_long(&ret);
+			}
+			zval_ptr_dtor(&ret);
+		}
+	}
+	return sum;
+}
+
 /* curl_exec() inside a scope, in a fiber: the same transfer on a private
  * curl_multi handle, waiting in the cooperative curl_multi_select(), so option
  * callbacks run on PHP's thread, in the coroutine. The result is native:
@@ -2221,8 +2242,8 @@ static bool phasync_call_named(const char *name, zval *retval, uint32_t argc, zv
 static ZEND_NAMED_FUNCTION(phasync_curl_exec_override)
 {
 	zval mh, args[2], ret, running, info;
-	zend_long result = 0;
-	bool added = false;
+	zend_long result = 0, bytes, last_bytes = -1, usec = 1000, stuck = 0;
+	bool added = false, ready = false;
 
 	if (!phasync_reading() || EG(active_fiber) == NULL || phasync_from_c() || ZEND_NUM_ARGS() != 1
 	 || Z_TYPE_P(ZEND_CALL_ARG(execute_data, 1)) != IS_OBJECT
@@ -2256,11 +2277,29 @@ static ZEND_NAMED_FUNCTION(phasync_curl_exec_override)
 		if (Z_TYPE_P(r) != IS_LONG || Z_LVAL_P(r) == 0) {
 			break;
 		}
+		/* A paused transfer (a callback returned CURL_*FUNC_PAUSE) keeps its
+		 * socket ready, so the select reports activity at once and nothing
+		 * moves: sleep through the loop (1ms, doubling to 20ms) until it does,
+		 * so the coroutine that calls curl_pause(CONT) gets to run. A connect or
+		 * TLS handshake also has ready rounds with no bytes counted, so only
+		 * several in a row count as stuck. */
+		bytes = phasync_curl_bytes(ZEND_CALL_ARG(execute_data, 1));
+		stuck = ready && bytes == last_bytes ? stuck + 1 : 0;
+		if (stuck >= 4) {
+			if (phasync_call_sleep(phasync_sleep_handler(), usec) < 0) {
+				goto cancelled;
+			}
+			usec = MIN(usec * 2, 20000);
+		} else {
+			usec = 1000;
+		}
+		last_bytes = bytes;
 		ZVAL_UNDEF(&ret);
 		phasync_curl_select(&mh, 1.0, &ret);
 		if (EG(exception)) {
 			goto cancelled;
 		}
+		ready = Z_TYPE(ret) == IS_LONG && Z_LVAL(ret) > 0;
 		zval_ptr_dtor(&ret);
 	}
 	zval_ptr_dtor(&args[1]);
