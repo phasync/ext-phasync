@@ -437,8 +437,8 @@ call `Fiber::suspend()`, and resuming the fiber continues the loop.
 Preemption happens only between loop iterations, and not where the callback of
 a C function or the engine may not suspend (`usort()` and kin, error and output
 handlers, autoloaders, magic property methods, serialization hooks, session
-handlers, stream wrappers beyond plain I/O ...; the full list, with the reason
-for each, is in [docs/c-to-php-suspension.md](docs/c-to-php-suspension.md)), in
+handlers, `preg_replace_callback()`, stream wrappers beyond plain I/O ...; the
+full list, with the reason for each, is in [docs/c-to-php-suspension.md](docs/c-to-php-suspension.md)), in
 destructors, in exception handlers and shutdown functions, or in
 `#[\phasync\Uninterruptible]` functions and what they call. The stack is checked down to the fiber's first
 frame (outside fibers, to the script's own code).

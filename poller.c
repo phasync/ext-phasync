@@ -578,7 +578,7 @@ static bool phasync_never_cfunc(const zend_function *fn)
 	static const char *const funcs[] = {
 		"usort", "uasort", "uksort", "serialize", "unserialize", "json_encode", "var_dump", "print_r",
 		"debug_zval_dump", "mb_ereg_replace_callback", "spl_autoload_call", "spl_autoload", "gc_destructor_fiber",
-		"curl_exec", "curl_multi_exec" };
+		"curl_exec", "curl_multi_exec", "preg_replace_callback", "preg_replace_callback_array" };
 	static const char *const prefixes[] = { "array_u", "array_diff_u", "array_intersect_u" };
 	static const char *const classes[] = { "UConverter", "XSLTProcessor", "DOMXPath", "Dom\\XPath", "ZipArchive" };
 	static const char *const modules[] = { "session", "soap", "readline", "ldap" };

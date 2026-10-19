@@ -36,11 +36,12 @@ Why a list at all: PHP already has to survive a callback doing anything to userl
 | FFI callbacks | internal function with `ZEND_ACC_CALL_VIA_TRAMPOLINE` | called from foreign code on its stack | none |
 | `UConverter`, `XSLTProcessor`, `DOMXPath`, `Dom\XPath`, `ZipArchive`, `mb_ereg_replace_callback` | class or function name; `toUCallback`/`fromUCallback` by method name | library or global state mid-call | a busy mark per object (`mb_ereg`: none, its regex state is global) |
 | curl callbacks: write, read, header, xferinfo, progress, debug, fnmatch, prereq, ssh hostkey, multi push | `curl_exec` or `curl_multi_exec` frame under a user frame | libcurl's behaviour with two callbacks of one multi in flight is unknown, and the shared-multi design runs them from the driver | none planned. `curl_exec()` and `curl_multi_select()` themselves wait cooperatively. Tests reach write, read, xferinfo, progress, debug, header, prereq; fnmatch (ftp), ssh hostkey and push (HTTP/2) need servers not available here |
+| `preg_replace_callback`, `preg_replace_callback_array` | function name | ext/pcre's `mdata_used` (`ZEND_TLS`) is saved/restored around the call; two callbacks interleaved restore it out of order and leave it stuck at 1 (every later `preg_*` call then allocates its own match data for the rest of the request) | a per-call match-data slot instead of the shared TLS one |
 | GC destructor fiber | bottom function `gc_destructor_fiber` | not a phasync coroutine | hold `GC_G(dtor_fiber)` and resume it from the loop |
 
 ## May suspend
 
-`array_map`, `array_filter`, `array_walk`, `array_reduce`, `array_find*`, `array_any`, `array_all`, `iterator_*`, `preg_replace_callback*`, `xml_parse*`, SQLite3/PDO behind `conn_busy`, `SplHeap`/`SplPriorityQueue`, `filter_var`, `IntlChar::enum*`, `Random\Randomizer`, and engine calls at a call site: Iterator methods under `foreach`, ArrayAccess from opcodes, `__toString`, `__clone`, property hooks, destructors at free (PHP 8.4+; 8.3 forbids a fiber switch there).
+`array_map`, `array_filter`, `array_walk`, `array_reduce`, `array_find*`, `array_any`, `array_all`, `iterator_*`, `xml_parse*`, SQLite3/PDO behind `conn_busy`, `SplHeap`/`SplPriorityQueue`, `filter_var`, `IntlChar::enum*`, `Random\Randomizer`, and engine calls at a call site: Iterator methods under `foreach`, ArrayAccess from opcodes, `__toString`, `__clone`, property hooks, destructors at free (PHP 8.4+; 8.3 forbids a fiber switch there).
 
 ## Adding or removing an entry
 
