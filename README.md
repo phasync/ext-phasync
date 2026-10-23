@@ -285,9 +285,10 @@ one-call rule below, and cannot be from the extension; a fix belongs in php-memc
 
 - `memcached.sess_persistent=1` (off by default) makes the handler share one
   persistent libmemcached handle without going through a `Memcached` method, so
-  concurrent requests in one worker can drive it at the same time and interleave on
-  its socket. The extension warns once at the first request when this is combined
-  with `session.save_handler=memcached`.
+  concurrent coroutines can drive it at the same time and interleave on its
+  socket. `manage()` refuses to run at all (a `LogicException`) while this is
+  combined with `session.save_handler=memcached`, rather than let it happen
+  silently.
 - The wait for a locked session (`memcached.sess_locking`, `memcached.sess_lock_wait_*`)
   is a libc `usleep()` retry loop inside php-memcached; it blocks the whole worker
   (all coroutines) until the lock is free or the retries are spent.

@@ -331,6 +331,20 @@ static void phasync_wrap_existing_streams(bool include_files)
 
 /* ---- manage(): scoped handler activation --------------------------------- */
 
+/* memcached.sess_persistent shares one libmemcached handle across every
+ * coroutine without the per-handle lock (that lock lives on the Memcached
+ * object's methods, which the session handler bypasses), and its session
+ * lock wait is a libc usleep() that blocks the whole process -- neither is
+ * fixable from here (see README, Memcached). Checked at every outermost
+ * manage() because both ini settings are PHP_INI_ALL. */
+static bool phasync_memcached_sessions_unsafe(void)
+{
+	const char *save_handler = zend_ini_string("session.save_handler", sizeof("session.save_handler") - 1, false);
+
+	return save_handler && strcmp(save_handler, "memcached") == 0
+	    && zend_ini_long("memcached.sess_persistent", sizeof("memcached.sess_persistent") - 1, false);
+}
+
 ZEND_FUNCTION(phasync_ext_manage)
 {
 	zval *code, *poller, *sleep;
@@ -353,6 +367,16 @@ ZEND_FUNCTION(phasync_ext_manage)
 		if (!EG(exception)) {
 			zend_argument_value_error(4, "must be the name of an existing Throwable class");
 		}
+		RETURN_THROWS();
+	}
+
+	if (PHASYNC_G(scope_top) == NULL && phasync_memcached_sessions_unsafe()) {
+		zend_throw_exception(spl_ce_LogicException, "memcached.sess_persistent=1 with "
+			"session.save_handler=memcached shares a persistent connection between "
+			"coroutines without the per-handle lock, and its session lock wait blocks "
+			"the process; manage() refuses to run with this combination -- set "
+			"memcached.sess_persistent=0, or use another session handler (see README, "
+			"Memcached)", 0);
 		RETURN_THROWS();
 	}
 
@@ -399,20 +423,10 @@ ZEND_FUNCTION(phasync_ext_manage)
 
 static PHP_RINIT_FUNCTION(phasync)
 {
-	static bool checked;
-
 	if (phasync_scope_bundled) {
 		scope_module_entry.request_startup_func(type, module_number);
 	}
 
-	if (!checked) {
-		checked = true;
-		const char *save_handler = zend_ini_string("session.save_handler", sizeof("session.save_handler") - 1, false);
-		if (zend_ini_long("memcached.sess_persistent", sizeof("memcached.sess_persistent") - 1, false)
-		 && save_handler && strcmp(save_handler, "memcached") == 0) {
-			php_error_docref(NULL, E_WARNING, "memcached.sess_persistent=1 shares one connection between concurrent coroutines without protection, and the session lock wait blocks the process; set it to 0 (see README, Memcached)");
-		}
-	}
 	PHASYNC_G(scope_top) = NULL;
 	PHASYNC_G(spawn) = NULL;
 	PHASYNC_G(ub_writing) = false;
