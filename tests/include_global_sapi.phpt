@@ -11,16 +11,22 @@ use function phasync\ext\include_global;
 $a = new Sink;
 $a->info = ['method' => 'GET', 'query_string' => ''];
 
-sapi(function () {
-    $ret = include_global(__DIR__ . '/include_global_a.inc');
-    var_dump($ret);
-    var_dump($GLOBALS['x']);
-    var_dump(include_global_reader());
+$seen = [];
+sapi(function () use (&$seen) {
+    ob_start(); // the fixture's own echo'd __FILE__/__DIR__ go to $a->out, not this test's stdout
+    $seen['ret'] = include_global(__DIR__ . '/include_global_a.inc');
+    ob_end_clean();
+    $seen['x'] = $GLOBALS['x'];
+    $seen['reader'] = include_global_reader();
 }, $a);
+var_dump($seen);
 ?>
---EXPECTF--
-%sinclude_global_a.inc
-%stests
-string(13) "return-from-a"
-string(9) "set-by-a"
-string(9) "set-by-a"
+--EXPECT--
+array(3) {
+  ["ret"]=>
+  string(13) "return-from-a"
+  ["x"]=>
+  string(8) "set-by-a"
+  ["reader"]=>
+  string(8) "set-by-a"
+}

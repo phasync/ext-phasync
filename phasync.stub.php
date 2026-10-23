@@ -201,6 +201,20 @@ function sapi(\Closure $code, object $sapi): mixed {}
 function run_next(string $script): void {}
 
 /**
+ * Runs $file as PHP runs a script's main file: its top-level code executes in
+ * the global scope, so its variables are globals (seen by `global $x` and
+ * $GLOBALS), even when called from inside a function, a closure or a Fiber.
+ * Otherwise like require: an uncaught exception or a compile error propagates
+ * to the caller, the return value is $file's, opcache and include_path apply,
+ * and __FILE__/__DIR__ are $file's.
+ *
+ * Throws an Error while other code runs in the global scope with top-level
+ * variables of its own, such as the main script or another include_global()
+ * still running in another Fiber: both would own the same variables.
+ */
+function include_global(string $file): mixed {}
+
+/**
  * Process-wide counters of de-blocked pipe I/O: 'pipe_nowait' counts a pipe
  * read/write that used preadv2()/pwritev2() with RWF_NOWAIT (no O_NONBLOCK
  * toggle); 'pipe_fcntl_fallback' counts one that fell back to toggling

@@ -20,5 +20,5 @@ var_dump(include_global_reader());
 %sinclude_global_a.inc
 %stests
 string(13) "return-from-a"
-string(9) "set-by-a"
-string(9) "set-by-a"
+string(8) "set-by-a"
+string(8) "set-by-a"

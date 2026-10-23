@@ -1,13 +1,6 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 5ccaae68d1e29a786b26f6cb25a8f9a05bc47af0 */
+ * Stub hash: 65a3ba82c471c50c48fc998620ed4abcae7d7be8 */
 
-/* Hand-maintained: never regenerate it with gen_stub (PHP 8.3 has no frameless
- * infos in ZEND_RAW_FENTRY, PHASYNC_RAW_FENTRY adapts). */
-#if PHP_VERSION_ID >= 80400
-# define PHASYNC_RAW_FENTRY ZEND_RAW_FENTRY
-#else
-# define PHASYNC_RAW_FENTRY(zend_name, name, arg_info, flags, frameless_infos, doc) ZEND_RAW_FENTRY(zend_name, name, arg_info, flags)
-#endif
 /* Hand-maintained: never regenerate it with gen_stub (PHP 8.3 has no frameless
  * infos in ZEND_RAW_FENTRY, PHASYNC_RAW_FENTRY adapts). */
 #if PHP_VERSION_ID >= 80400
@@ -36,6 +29,10 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_phasync_ext_run_next, 0, 1, IS_V
 	ZEND_ARG_TYPE_INFO(0, script, IS_STRING, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_phasync_ext_include_global, 0, 1, IS_MIXED, 0)
+	ZEND_ARG_TYPE_INFO(0, file, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_phasync_ext_io_stats, 0, 0, IS_ARRAY, 0)
 ZEND_END_ARG_INFO()
 
@@ -60,6 +57,7 @@ ZEND_FUNCTION(phasync_ext_set_preempt_function);
 ZEND_FUNCTION(phasync_ext_manage);
 ZEND_FUNCTION(phasync_ext_sapi);
 ZEND_FUNCTION(phasync_ext_run_next);
+ZEND_FUNCTION(phasync_ext_include_global);
 ZEND_FUNCTION(phasync_ext_io_stats);
 ZEND_METHOD(phasync_ext_Poller, __construct);
 ZEND_METHOD(phasync_ext_Poller, poll);
@@ -71,6 +69,7 @@ static const zend_function_entry ext_functions[] = {
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "manage"), zif_phasync_ext_manage, arginfo_phasync_ext_manage, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "sapi"), zif_phasync_ext_sapi, arginfo_phasync_ext_sapi, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "run_next"), zif_phasync_ext_run_next, arginfo_phasync_ext_run_next, 0, NULL, NULL)
+	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "include_global"), zif_phasync_ext_include_global, arginfo_phasync_ext_include_global, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "io_stats"), zif_phasync_ext_io_stats, arginfo_phasync_ext_io_stats, 0, NULL, NULL)
 	ZEND_FE_END
 };

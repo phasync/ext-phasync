@@ -33,6 +33,6 @@ caller2();
 %sinclude_global_a.inc
 %stests
 string(13) "return-from-a"
-string(9) "set-by-a"
-string(9) "set-by-a"
-string(21) "set-by-a-seen-by-b"
+string(8) "set-by-a"
+string(8) "set-by-a"
+string(18) "set-by-a-seen-by-b"

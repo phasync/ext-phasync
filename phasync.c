@@ -48,6 +48,63 @@
 #include "coroutine.c"
 #include "sapi.c"
 
+/* Swerve's script handler (Swerve::accept()) requires an app's entry file
+ * (e.g. WordPress's index.php) from inside a method, so its top-level
+ * variables land as that method's locals instead of globals -- the file
+ * loses its own global scope. include_global() compiles $file and runs its
+ * op_array the way Zend/zend.c's zend_execute_script() runs the primary
+ * script: a top-level call frame bound to EG(symbol_table), never the
+ * caller's locals, no matter how deeply nested the call (a function, a
+ * closure, a Fiber). Unlike zend_execute_script(), an uncaught exception
+ * is left for the normal internal-function return path to propagate to our
+ * own caller instead of being turned into a fatal error -- there is a PHP
+ * caller here to give it to. */
+ZEND_FUNCTION(phasync_ext_include_global)
+{
+	zend_string *filename;
+	zend_op_array *op_array;
+	zend_execute_data *call;
+
+	ZEND_PARSE_PARAMETERS_START(1, 1)
+		Z_PARAM_PATH_STR(filename)
+	ZEND_PARSE_PARAMETERS_END();
+
+	op_array = compile_filename(ZEND_REQUIRE, filename);
+	if (!op_array) {
+		/* Already reported the way a bareword require() reports it: a
+		 * missing file as E_COMPILE_ERROR, a syntax error as a thrown
+		 * ParseError (EG(exception) is set in that case). */
+		return;
+	}
+
+	/* A frame bound to the global symbol table owns its variables there (IS_INDIRECT to its CVs).
+	 * Binding a second one with a variable of the same name would copy the value into both,
+	 * with nothing to bind the first back afterwards, as require from the top level does. */
+	for (uint32_t i = 0; i < op_array->last_var; i++) {
+		zval *zv = zend_hash_find_known_hash(&EG(symbol_table), op_array->vars[i]);
+		if (zv && Z_TYPE_P(zv) == IS_INDIRECT) {
+			zend_throw_error(NULL, "phasync\\ext\\include_global(): $%s is a top-level variable of code still running in the global scope, which %s cannot share",
+				ZSTR_VAL(op_array->vars[i]), ZSTR_VAL(filename));
+			zend_destroy_static_vars(op_array);
+			destroy_op_array(op_array);
+			efree_size(op_array, sizeof(zend_op_array));
+			return;
+		}
+	}
+
+	call = zend_vm_stack_push_call_frame(ZEND_CALL_TOP_CODE | ZEND_CALL_HAS_SYMBOL_TABLE,
+		(zend_function *) op_array, 0, NULL);
+	call->symbol_table = &EG(symbol_table);
+	zend_init_code_execute_data(call, op_array, return_value);
+	ZEND_OBSERVER_FCALL_BEGIN(call);
+	zend_execute_ex(call);
+	zend_vm_stack_free_call_frame(call);
+
+	zend_destroy_static_vars(op_array);
+	destroy_op_array(op_array);
+	efree_size(op_array, sizeof(zend_op_array));
+}
+
 /* issue #42: whether a de-blocked pipe read/write took the preadv2()/pwritev2()
  * RWF_NOWAIT path, or fell back to toggling O_NONBLOCK. Process-wide, never reset. */
 ZEND_FUNCTION(phasync_ext_io_stats)
