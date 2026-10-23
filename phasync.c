@@ -316,6 +316,9 @@ static void phasync_wrap_existing_streams(bool include_files)
 		if (stream->readfilters.head || stream->writefilters.head) {
 			continue;   /* filters rewrite the bytes; can't raw-read the fd */
 		}
+		if (stream->ops == &php_stream_userspace_ops) {
+			continue;   /* a userspace wrapper's stream_cast() fd is its own to close, not ours to own */
+		}
 		fd = phasync_stream_fd(stream);
 		if (fd == -1 || fstat(fd, &st) != 0) {
 			continue;
