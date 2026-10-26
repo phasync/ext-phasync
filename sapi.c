@@ -1130,3 +1130,32 @@ ZEND_FUNCTION(phasync_ext_run_next)
 	zval *title = zend_get_constant_str(ZEND_STRL("PHP_CLI_PROCESS_TITLE"));
 	phasync_next_title = title && zend_is_true(title);
 }
+
+/* ---- dup2(): a stream's fd onto a given descriptor, outliving the request ---- */
+
+ZEND_FUNCTION(phasync_ext_dup2)
+{
+	zval *zstream;
+	zend_long fd;
+	php_stream *stream;
+	php_socket_t src;
+
+	ZEND_PARSE_PARAMETERS_START(2, 2)
+		Z_PARAM_RESOURCE(zstream)
+		Z_PARAM_LONG(fd)
+	ZEND_PARSE_PARAMETERS_END();
+
+	if (fd < 0) {
+		zend_argument_value_error(2, "must not be negative");
+		RETURN_THROWS();
+	}
+	php_stream_from_zval(stream, zstream);
+	if ((src = phasync_stream_fd(stream)) == -1) {
+		zend_argument_type_error(1, "must be a stream with a file descriptor");
+		RETURN_THROWS();
+	}
+	if (src != (php_socket_t) fd && dup2(src, (int) fd) == -1) {
+		zend_throw_exception_ex(spl_ce_RuntimeException, 0, "dup2(%d, %d) failed: %s", (int) src, (int) fd, strerror(errno));
+		RETURN_THROWS();
+	}
+}

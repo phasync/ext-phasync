@@ -201,6 +201,18 @@ function sapi(\Closure $code, object $sapi): mixed {}
 function run_next(string $script): void {}
 
 /**
+ * Duplicate the file descriptor of $stream onto $fd, as dup2(2): $fd is closed first if open,
+ * and afterwards belongs to no PHP resource, so it stays open across requests (run_next())
+ * until the process closes it or exits. $stream itself is unchanged.
+ *
+ * @param resource $stream a stream with a file descriptor (a socket, a file, a pipe)
+ * @throws \ValueError if $fd is negative
+ * @throws \TypeError if $stream is not a stream that can give a file descriptor
+ * @throws \RuntimeException if dup2() fails (with strerror)
+ */
+function dup2(mixed $stream, int $fd): void {}
+
+/**
  * Runs $file as PHP runs a script's main file: its top-level code executes in
  * the global scope, so its variables are globals (seen by `global $x` and
  * $GLOBALS), even when called from inside a function, a closure or a Fiber.

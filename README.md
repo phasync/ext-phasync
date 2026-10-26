@@ -156,6 +156,8 @@ function sapi(
 
 function run_next(string $script): void;   // CLI: run $script once more as a fresh request when this one ends
 
+function dup2(mixed $stream, int $fd): void;   // as dup2(2): $fd stays open across requests (run_next()), owned by no PHP resource
+
 function set_preempt_function(?\Closure $fn, float $minInterval = 0.1): ?\Closure;
 ```
 
@@ -451,6 +453,10 @@ stay open, so a socket passed as fd 3 can be served across runs: set `stream_set
 to read exactly what is consumed, since a stream's read buffer is lost with its request. Resource
 limits are not reset, and a `fork()`ed child that ends does not run the next request. `$script` must be
 readable when called (a `ValueError` otherwise), and the SAPI must be the CLI (an `Error`).
+
+`dup2($stream, $fd)` puts `$stream`'s descriptor on `$fd` (as `dup2(2)`), owned by no PHP resource
+afterwards, so it survives request shutdown and is there in every later `run_next()` run — the way a
+`pcntl_fork()`ed worker keeps a channel to its parent on a fixed descriptor across restarts.
 
 ### Preemption: `set_preempt_function()`
 
