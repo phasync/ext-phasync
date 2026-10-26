@@ -138,10 +138,12 @@ final class Loop
         $this->ready = array_values(array_filter($this->ready, fn($r) => $r[0] !== $fiber));
     }
 
-    public function go(Closure|Fiber $fn): Fiber
+    /** $args are passed to Fiber::start(): the coroutine's first frame is then a call from C with them. */
+    public function go(Closure|Fiber $fn, mixed ...$args): Fiber
     {
         $fiber = $fn instanceof Fiber ? $fn : new Fiber($fn);
         $this->ready[] = [$fiber, 'start'];
+        $this->startArgs[spl_object_id($fiber)] = $args;
         return $fiber;
     }
 
@@ -153,6 +155,8 @@ final class Loop
     }
 
     private float $end = PHP_FLOAT_MAX;
+
+    private array $startArgs = [];     // spl_object_id(coroutine) => what go() passes to start()
 
     /** One round: run what is ready, then poll. False when nothing is left. */
     private function step(): bool
@@ -167,7 +171,9 @@ final class Loop
                 $this->current = $fiber;
                 try {
                     if ($how === 'start') {
-                        $fiber->start();
+                        $args = $this->startArgs[$id] ?? [];
+                        unset($this->startArgs[$id]);
+                        $fiber->start(...$args);
                     } elseif ($how instanceof Throwable) {
                         $fiber->throw($how);
                     } else {
