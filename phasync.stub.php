@@ -176,6 +176,26 @@ function manage(\Closure $task, Poller $poller, \Closure $sleep, string $timeout
 function sapi(\Closure $code, object $sapi): mixed {}
 
 /**
+ * Run $script once more, as a new request, when the current script has ended:
+ * after its shutdown functions, destructors and output buffers, the process runs
+ * $script (a path, resolved against the working directory now) from a fresh
+ * request start, in the same process. Statics, globals, declared functions and
+ * classes, constants, ini values, handlers, output buffers and registered
+ * shutdown functions are as in the first request of a process, as under FPM;
+ * the opcache stays warm; $argv, $_SERVER and the process id are those of the
+ * first. The working directory, umask, signal mask and alarm() are put back to
+ * what the process started with.
+ *
+ * The recording is used once: the new run is the one to call run_next() again
+ * if it is to be followed by another, and it can do so forever. Calling it again
+ * before the script ends replaces the recording. Whatever ends a run, including
+ * exit() and a fatal error, the next run still happens if one was recorded
+ * before. The exit status of the process is the last run's. Throws a ValueError
+ * if $script is not a readable file, an Error unless the SAPI is the CLI.
+ */
+function run_next(string $script): void {}
+
+/**
  * Process-wide counters of de-blocked pipe I/O: 'pipe_nowait' counts a pipe
  * read/write that used preadv2()/pwritev2() with RWF_NOWAIT (no O_NONBLOCK
  * toggle); 'pipe_fcntl_fallback' counts one that fell back to toggling

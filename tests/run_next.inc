@@ -11,7 +11,7 @@ function rn_dir(): string
 function rn_exec(string $dir, string $script, array $args = [], ?string $cwd = null): array
 {
     $so = realpath(ini_get('extension_dir') . '/phasync.so');
-    $cmd = escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg($so) . ' -d error_reporting=-1 '
+    $cmd = escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg($so) . ' -d error_reporting=-1 -d log_errors=0 '
         . escapeshellarg($script) . ' ' . implode(' ', array_map('escapeshellarg', $args)) . ' 2>&1';
     $p = proc_open($cmd, [1 => ['pipe', 'w']], $pipes, $cwd ?? $dir);
     $out = stream_get_contents($pipes[1]);

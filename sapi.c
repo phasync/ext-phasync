@@ -865,3 +865,145 @@ static void phasync_req_rshutdown(void)
 	phasync_find_ifunc("connection_status", sizeof("connection_status") - 1)->handler = phasync_req_orig_connection_status;
 	zend_hash_destroy(&phasync_req_fibers);
 }
+
+/* ---- run_next(): the script again, as a fresh request, in this process ---- */
+
+/* php_module_shutdown() starts with sapi_flush(), after the CLI's request has
+ * ended and before anything of the process is taken down: run_next() lives off
+ * that call. The process state a request can change but PHP does not undo
+ * (cwd, umask, signal mask, alarm) is put back to its start-up value between
+ * runs. */
+static char *phasync_next_script;               /* malloc'd; one-shot */
+static bool phasync_next_cli, phasync_next_running;
+static void (*phasync_next_flush_prev)(void *server_context);
+static char phasync_next_cwd[MAXPATHLEN];
+static mode_t phasync_next_umask;
+static sigset_t phasync_next_sigmask;
+static int phasync_next_status;
+static void phasync_next_flush(void *server_context);
+static void phasync_next_exit(void);
+
+static void phasync_next_minit(void)
+{
+	if (!(phasync_next_cli = strcmp(sapi_module.name, "cli") == 0)) {
+		return;
+	}
+	phasync_next_umask = umask(0);
+	umask(phasync_next_umask);
+	pthread_sigmask(SIG_SETMASK, NULL, &phasync_next_sigmask);
+	if (!getcwd(phasync_next_cwd, sizeof(phasync_next_cwd))) {
+		phasync_next_cwd[0] = '\0';
+	}
+	phasync_next_flush_prev = sapi_module.flush;
+	sapi_module.flush = phasync_next_flush;
+}
+
+static void phasync_next_mshutdown(void)
+{
+	if (phasync_next_cli) {
+		sapi_module.flush = phasync_next_flush_prev;
+	}
+	free(phasync_next_script);
+	phasync_next_script = NULL;
+}
+
+/* do_cli()'s cli_register_file_handles(): the constants are per request. Their
+ * streams are dup()s of fd 0-2 (php://std* only hands out the descriptors
+ * themselves once per process), closed with the request. */
+static void phasync_next_stdio(void)
+{
+	static const struct { const char *url, *mode, *name; size_t len; } c[] = {
+		{"php://stdin", "rb", "STDIN", 5}, {"php://stdout", "wb", "STDOUT", 6}, {"php://stderr", "wb", "STDERR", 6},
+	};
+
+	for (int i = 0; i < 3; i++) {
+		php_stream *s = php_stream_open_wrapper_ex(c[i].url, c[i].mode, 0, NULL, NULL);
+		zend_constant k;
+
+		php_stream_to_zval(s, &k.value);
+		ZEND_CONSTANT_SET_FLAGS(&k, CONST_CS, 0);
+		k.name = zend_string_init_interned(c[i].name, c[i].len, 0);
+		zend_register_constant(&k);
+	}
+}
+
+static void phasync_next_run(void)
+{
+	int status = EG(exit_status), original = status;
+
+	phasync_next_running = true;
+	zend_interned_strings_switch_storage(1);   /* php_module_shutdown() has switched to the permanent ones */
+	while (phasync_next_script) {
+		zend_file_handle fh;
+		char *script = phasync_next_script;
+
+		phasync_next_script = NULL;
+		alarm(0);
+		pthread_sigmask(SIG_SETMASK, &phasync_next_sigmask, NULL);
+		umask(phasync_next_umask);
+		if (phasync_next_cwd[0] && chdir(phasync_next_cwd) != 0) {
+			fprintf(stderr, "phasync\\ext\\run_next(): cannot return to %s: %s\n", phasync_next_cwd, strerror(errno));
+		}
+		if (php_request_startup() == FAILURE) {
+			fprintf(stderr, "phasync\\ext\\run_next(): php_request_startup() failed\n");
+			status = 255;
+			free(script);
+			break;
+		}
+		EG(exit_status) = 0;
+		SG(headers_sent) = 1;
+		SG(request_info).no_headers = 1;
+		phasync_next_stdio();
+		CG(skip_shebang) = 1;
+		zend_stream_init_filename(&fh, script);
+		fh.primary_script = 1;
+		php_execute_script(&fh);
+		zend_destroy_file_handle(&fh);
+		php_request_shutdown(NULL);
+		status = EG(exit_status);
+		free(script);
+	}
+	zend_interned_strings_switch_storage(0);
+	phasync_next_running = false;
+	if (status != original) {
+		/* main() returns do_cli()'s status: the last run's is put in its place once everything else has shut down */
+		phasync_next_status = status;
+		atexit(phasync_next_exit);
+	}
+}
+
+static void phasync_next_exit(void)
+{
+	fflush(NULL);
+	_exit(phasync_next_status);
+}
+
+static void phasync_next_flush(void *server_context)
+{
+	phasync_next_flush_prev(server_context);
+	if (php_during_module_shutdown() && !phasync_next_running && phasync_next_script) {
+		phasync_next_run();
+	}
+}
+
+ZEND_FUNCTION(phasync_ext_run_next)
+{
+	zend_string *script;
+	char resolved[MAXPATHLEN];
+	struct stat st;
+
+	ZEND_PARSE_PARAMETERS_START(1, 1)
+		Z_PARAM_PATH_STR(script)
+	ZEND_PARSE_PARAMETERS_END();
+
+	if (!phasync_next_cli) {
+		zend_throw_error(NULL, "phasync\\ext\\run_next() requires the CLI SAPI (this is %s)", sapi_module.name);
+		RETURN_THROWS();
+	}
+	if (!expand_filepath(ZSTR_VAL(script), resolved) || stat(resolved, &st) != 0 || !S_ISREG(st.st_mode) || access(resolved, R_OK) != 0) {
+		zend_argument_value_error(1, "must be a readable file, \"%s\" is not", resolved);
+		RETURN_THROWS();
+	}
+	free(phasync_next_script);
+	phasync_next_script = strdup(resolved);
+}

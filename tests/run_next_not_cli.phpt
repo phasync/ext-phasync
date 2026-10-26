@@ -11,7 +11,7 @@ file_put_contents("$d/router.php", <<<'PHP'
 try {
     phasync\ext\run_next(__FILE__);
 } catch (Error $e) {
-    echo get_class($e), ": ", $e->getMessage(), " (", PHP_SAPI, ")";
+    echo get_class($e), ": ", $e->getMessage();
 }
 PHP);
 $s = stream_socket_server('tcp://127.0.0.1:0');
@@ -29,4 +29,4 @@ proc_close($p);
 rn_clean($d);
 ?>
 --EXPECT--
-Error: phasync\ext\run_next() is only available under the CLI SAPI (cli-server) (cli-server)
+Error: phasync\ext\run_next() requires the CLI SAPI (this is cli-server)

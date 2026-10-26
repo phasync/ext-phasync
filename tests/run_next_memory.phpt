@@ -10,7 +10,7 @@ file_put_contents("$d/mem.php", <<<'PHP'
 <?php
 function rss() { return (int) explode(' ', file_get_contents('/proc/self/statm'))[1] * 4096; }
 class Big { public array $a; function __construct() { $this->a = range(1, 20000); } }
-$n = count(file($argv[1])) + 1;
+$n = count(@file($argv[1]) ?: []) + 1;
 file_put_contents($argv[1], "$n\n", FILE_APPEND);
 $keep = [new Big, str_repeat('x', 1 << 20)];
 static $s = [1, 2, 3];

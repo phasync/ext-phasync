@@ -34,7 +34,7 @@ echo "registers once:\n";
 echo $out, "status: $status\n";
 echo "then a fatal error:\n";
 [$out, $status] = rn_exec($d, "$d/first_fatal.php", ["$d/fatal.php"]);
-echo preg_replace('/PHP Fatal.*\n/', '', $out), "status: $status\n";
+echo $out, "status: $status\n";
 rn_clean($d);
 ?>
 --EXPECT--
@@ -48,6 +48,7 @@ status: 0
 then a fatal error:
 first
 fatal run
+
 Fatal error: Uncaught Error: Call to undefined function undefined_function() in DIR/fatal.php:3
 Stack trace:
 #0 {main}

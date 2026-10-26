@@ -53,6 +53,7 @@
 #include "ext/standard/file.h"
 #include "rfc1867.h"
 #include "php_variables.h"
+#include "php_main.h"
 #include "php_open_temporary_file.h"
 #include "zend_observer.h"
 #include "zend_fibers.h"

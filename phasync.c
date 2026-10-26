@@ -179,6 +179,7 @@ static PHP_MINIT_FUNCTION(phasync)
 	php_stream_stdio_ops.read = phasync_stdio_read;
 	php_stream_stdio_ops.write = phasync_stdio_write;
 	php_stream_stdio_ops.set_option = phasync_stdio_set_option;
+	phasync_next_minit();
 	return SUCCESS;
 }
 
@@ -284,6 +285,7 @@ static PHP_MSHUTDOWN_FUNCTION(phasync)
 	if (phasync_ub_write_orig) {
 		sapi_module.ub_write = phasync_ub_write_orig;
 	}
+	phasync_next_mshutdown();
 	UNREGISTER_INI_ENTRIES();
 	return SUCCESS;
 }
