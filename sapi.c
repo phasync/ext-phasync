@@ -110,6 +110,7 @@ typedef struct phasync_req_state {
 typedef struct phasync_request {
 	uint32_t refcount;                 /* the sapi() call + each fiber of the request */
 	bool ended;                        /* output of fibers still running is discarded */
+	bool aborted;                      /* a write() failed: the bailout at that write is ours to swallow, not a real fatal/exit() */
 	zend_string *name;                 /* PHP_SAPI and php_sapi_name() while installed */
 	zval sapi;
 	zend_function *m_write, *m_read, *m_send_headers, *m_flush, *m_connection_aborted;
@@ -416,9 +417,13 @@ static void phasync_req_call(phasync_request *r, zend_function *fn, zval *rv, ui
 }
 
 /* The client is gone: later output is discarded, and, unless ignore_user_abort(),
- * the request ends here (zend_bailout()) as it does under every other SAPI. */
-static void phasync_req_aborted(void)
+ * the write that discovered it bails out (as every other SAPI's ub_write does) --
+ * r->aborted marks it as ours, so phasync_ext_sapi() unwinds only this request
+ * (no catch, no finally, like exit()) instead of letting it end the whole process
+ * the way a real fatal error or exit() does. */
+static void phasync_req_aborted(phasync_request *r)
 {
+	r->aborted = true;
 	php_handle_aborted_connection();
 }
 
@@ -441,7 +446,7 @@ static size_t phasync_req_ub_write(const char *str, size_t len)
 	phasync_req_call(r, r->m_write, &rv, 1, &arg);
 	zval_ptr_dtor(&arg);
 	if (Z_TYPE(rv) == IS_FALSE) {
-		phasync_req_aborted();
+		phasync_req_aborted(r);
 	} else if (Z_TYPE(rv) != IS_TRUE && Z_TYPE(rv) != IS_UNDEF) {
 		zend_type_error("%s::write() must return a bool, %s returned", ZSTR_VAL(Z_OBJCE(r->sapi)->name), zend_zval_value_name(&rv));
 	}
@@ -765,22 +770,31 @@ ZEND_FUNCTION(phasync_ext_sapi)
 			zval fn;
 
 			ZVAL_OBJ(&fn, code);
-			/* A bailout (a fatal error, or the client gone without ignore_user_abort())
-			 * must still end the request as phasync_req_finalize() below does -- the
-			 * installed request and the fiber-membership entry are otherwise left
-			 * dangling for whatever runs next (e.g. the CLI's own read_post drain at
-			 * the real request's shutdown, issue #121) -- then the bailout continues. */
+			/* A bailout must still end the request as phasync_req_finalize() below does --
+			 * the installed request and the fiber-membership entry are otherwise left
+			 * dangling for whatever runs next (e.g. the CLI's own read_post drain at the
+			 * real request's shutdown, issue #121). r->aborted (set by phasync_req_aborted(),
+			 * only for a failed write() with ignore_user_abort off) tells this request's own
+			 * bailout -- unwinding no catch, no finally, exactly like exit() -- from a real
+			 * fatal error or exit() itself: only the latter two continue propagating once this
+			 * request is cleaned up, ending the whole process; an aborted request's bailout
+			 * stops right here and sapi() returns normally to its caller, leaving every other
+			 * concurrently running request (each its own fiber) untouched. */
 			zend_try {
 				call_user_function(NULL, NULL, &fn, &retval, 0, NULL);
 			} zend_catch {
-				bailed = true;
+				if (!r->aborted) {
+					bailed = true;
+				}
 			} zend_end_try();
 		}
 		/* finalize() flushes whatever is still buffered: that write can abort too. */
 		zend_try {
 			phasync_req_finalize(r);
 		} zend_catch {
-			bailed = true;
+			if (!r->aborted) {
+				bailed = true;
+			}
 		} zend_end_try();
 	}
 	zend_hash_index_del(&phasync_req_fibers, PHASYNC_REQ_KEY(ctx));

@@ -140,9 +140,11 @@ function manage(\Closure $task, Poller $poller, \Closure $sleep, string $timeout
  *   inside the request.
  * - write(string $data): bool (required): output leaving the output buffers, piece
  *   by piece, as a SAPI's ub_write gets it. false means the client is gone:
- *   connection_aborted() becomes true and later output is discarded. The code is
- *   not stopped (ignore_user_abort() changes nothing): it ends when it finishes
- *   or when it checks connection_aborted().
+ *   connection_aborted() becomes true and later output is discarded. With
+ *   ignore_user_abort() off (the default), $code stops right there -- no catch,
+ *   no finally, like exit() -- and sapi() returns null to its caller, which
+ *   continues; other requests running concurrently (each sapi() call is its own
+ *   coroutine) are unaffected. With ignore_user_abort(true), $code runs on.
  * - send_headers(int $status, ?string $statusLine, array $headers): void
  *   (required): once, before the first output or when the request ends without
  *   any. $headers are raw lines as headers_list() returns them; $statusLine is

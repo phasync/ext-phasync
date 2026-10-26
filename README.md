@@ -426,9 +426,12 @@ What leaves the request goes to `$sapi` as a SAPI would receive it:
 | `flush()`, `connection_aborted(): bool` | `flush()` and the client's departure |
 
 `exit()` is not intercepted: it ends the script as under any SAPI, after the request's output has
-reached `$sapi`. `write()` and `read()` may wait for the client, suspending the request. `write()` returning `false` means the client is gone: `connection_aborted()` turns
-true and later output is discarded; the code is not stopped. Nesting throws. The full contract is the
-docblock in [`phasync.stub.php`](phasync.stub.php).
+reached `$sapi`. `write()` and `read()` may wait for the client, suspending the request. `write()`
+returning `false` means the client is gone: `connection_aborted()` turns true and later output is
+discarded; with `ignore_user_abort()` off (the default), the request stops right there -- no catch,
+no finally, like `exit()` -- and `sapi()` returns `null` to its caller, which continues; other
+requests running concurrently in the same worker (each `sapi()` call is its own coroutine) are
+unaffected. Nesting throws. The full contract is the docblock in [`phasync.stub.php`](phasync.stub.php).
 
 ### Preemption: `set_preempt_function()`
 
