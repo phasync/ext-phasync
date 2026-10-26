@@ -151,6 +151,12 @@ static PHP_MINIT_FUNCTION(phasync)
 	pthread_atfork(phasync_preempt_fork_prepare, phasync_preempt_fork_parent, phasync_fork_child);
 	zend_hash_init(&phasync_suspend_roots, 8, NULL, NULL, 1);
 	zend_observer_fiber_destroy_register(phasync_ledger_fiber_destroy);
+	/* The CLI's stdout hook goes under sapi()'s: output inside sapi() goes to
+	 * $sapi->write() whole, not in PIPE_BUF pieces after a poll() of stdout. */
+	if (strcmp(sapi_module.name, "cli") == 0) {
+		phasync_ub_write_orig = sapi_module.ub_write;
+		sapi_module.ub_write = phasync_ub_write;
+	}
 	phasync_req_minit();
 #ifdef PHASYNC_HAVE_SESSION
 	phasync_ps_files_startup();
@@ -173,10 +179,6 @@ static PHP_MINIT_FUNCTION(phasync)
 	php_stream_stdio_ops.read = phasync_stdio_read;
 	php_stream_stdio_ops.write = phasync_stdio_write;
 	php_stream_stdio_ops.set_option = phasync_stdio_set_option;
-	if (strcmp(sapi_module.name, "cli") == 0) {
-		phasync_ub_write_orig = sapi_module.ub_write;
-		sapi_module.ub_write = phasync_ub_write;
-	}
 	return SUCCESS;
 }
 
