@@ -1,5 +1,5 @@
 --TEST--
-sapi(): a request starts with output_buffering's default buffer (or output_handler, or implicit_flush), as php_request_startup() does (issue #9)
+sapi(): a request starts with output_buffering's default buffer (or output_handler), as php_request_startup() does, but never implicit_flush (issue #9)
 --EXTENSIONS--
 phasync
 --INI--

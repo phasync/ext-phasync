@@ -757,9 +757,9 @@ ZEND_FUNCTION(phasync_ext_sapi)
 			zval_ptr_dtor(&oh);
 		} else if (PG(output_buffering)) {
 			php_output_start_user(NULL, PG(output_buffering) > 1 ? PG(output_buffering) : 0, PHP_OUTPUT_HANDLER_STDFLAGS);
-		} else if (PG(implicit_flush)) {
-			php_output_set_implicit_flush(1);
 		}
+		/* No implicit_flush: the CLI forces it on, a web request has it off (as under
+		 * FPM). Output reaches write() at once anyway; flush() runs on flush(). */
 		{
 			zval fn;
 
