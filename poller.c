@@ -713,8 +713,10 @@ static bool phasync_never_callback(const zend_execute_data *ex, const zend_execu
 			return true;
 		}
 #endif
-		/* OpenSSL's reneg_limit_callback, called with the stream from inside SSL_read(). */
-		if (Z_TYPE_P(a) == IS_RESOURCE) {
+		/* OpenSSL's reneg_limit_callback, called with the stream from inside SSL_read(), so
+		 * below a stream function. OpenSSL labels every tcp:// stream: a coroutine started
+		 * with one (its first frame sits on the fiber's, which has no name) is no callback. */
+		if (Z_TYPE_P(a) == IS_RESOURCE && prev && prev->func && !ZEND_USER_CODE(prev->func->type) && prev->func->common.function_name) {
 			php_stream *s = zend_fetch_resource2_ex((zval *) a, NULL, php_file_le_stream(), php_file_le_pstream());
 			if (s && s->ops && s->ops->label && strcmp(s->ops->label, "tcp_socket/ssl") == 0) {
 				return true;
