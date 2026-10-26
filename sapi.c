@@ -881,6 +881,7 @@ static char phasync_next_cwd[MAXPATHLEN];
 static mode_t phasync_next_umask;
 static sigset_t phasync_next_sigmask;
 static int phasync_next_status;
+static bool phasync_next_title;                 /* do_cli()'s PHP_CLI_PROCESS_TITLE, defined again in every run */
 static void phasync_next_flush(void *server_context);
 static void phasync_next_exit(void);
 
@@ -967,7 +968,13 @@ static void phasync_next_run(void)
 		umask(phasync_next_umask);
 		if (phasync_next_cwd[0] && chdir(phasync_next_cwd) != 0) {
 			fprintf(stderr, "phasync\\ext\\run_next(): cannot return to %s: %s\n", phasync_next_cwd, strerror(errno));
+			status = 255;
+			free(script);
+			break;
 		}
+		/* do_cli() points path_translated at a copy it frees after its request; sapi_activate() leaves the code alone */
+		SG(request_info).path_translated = script;
+		SG(sapi_headers).http_response_code = 0;
 		if (php_request_startup() == FAILURE) {
 			fprintf(stderr, "phasync\\ext\\run_next(): php_request_startup() failed\n");
 			status = 255;
@@ -975,10 +982,11 @@ static void phasync_next_run(void)
 			break;
 		}
 		EG(exit_status) = 0;
-		SG(headers_sent) = 1;
-		SG(request_info).no_headers = 1;
 		phasync_next_stdio();
+		/* as do_cli() after its php_request_startup() */
 		CG(skip_shebang) = 1;
+		zend_register_bool_constant(ZEND_STRL("PHP_CLI_PROCESS_TITLE"), phasync_next_title, 0, 0);
+		zend_is_auto_global(ZSTR_KNOWN(ZEND_STR_AUTOGLOBAL_SERVER));
 		/* a FILE* like do_cli's, not a stream resource: the request looks like a first one */
 		FILE *fp = fopen(script, "rb");
 		if (fp) {
@@ -994,6 +1002,7 @@ static void phasync_next_run(void)
 		status = EG(exit_status);
 		free(script);
 	}
+	SG(request_info).path_translated = NULL;
 	zend_interned_strings_switch_storage(0);
 	*phasync_next_flag = true;
 	phasync_next_running = false;
@@ -1048,4 +1057,6 @@ ZEND_FUNCTION(phasync_ext_run_next)
 	free(phasync_next_script);
 	phasync_next_script = strdup(resolved);
 	phasync_next_pid = getpid();
+	zval *title = zend_get_constant_str(ZEND_STRL("PHP_CLI_PROCESS_TITLE"));
+	phasync_next_title = title && zend_is_true(title);
 }

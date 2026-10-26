@@ -184,7 +184,8 @@ function sapi(\Closure $code, object $sapi): mixed {}
  * shutdown functions are as in the first request of a process, as under FPM;
  * the opcache stays warm; $argv, $_SERVER and the process id are those of the
  * first. The working directory, umask, signal mask and alarm() are put back to
- * what the process started with.
+ * what the process started with (a working directory it cannot return to ends
+ * the process with status 255).
  *
  * The recording is used once: the new run is the one to call run_next() again
  * if it is to be followed by another, and it can do so forever. Calling it again

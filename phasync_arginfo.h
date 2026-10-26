@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 2486533b6b7b52f916cb34dcecc890dad0259759 */
+ * Stub hash: 358153ccad1220570401dc30642642a7b4e315ce */
 
 /* Hand-maintained: never regenerate it with gen_stub (PHP 8.3 has no frameless
  * infos in ZEND_RAW_FENTRY, PHASYNC_RAW_FENTRY adapts). */
@@ -8,7 +8,6 @@
 #else
 # define PHASYNC_RAW_FENTRY(zend_name, name, arg_info, flags, frameless_infos, doc) ZEND_RAW_FENTRY(zend_name, name, arg_info, flags)
 #endif
-
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_phasync_ext_set_preempt_function, 0, 1, Closure, 1)
 	ZEND_ARG_OBJ_INFO(0, fn, Closure, 1)
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, minInterval, IS_DOUBLE, 0, "0.1")
