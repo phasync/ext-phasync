@@ -190,7 +190,10 @@ function sapi(\Closure $code, object $sapi): mixed {}
  * if it is to be followed by another, and it can do so forever. Calling it again
  * before the script ends replaces the recording. Whatever ends a run, including
  * exit() and a fatal error, the next run still happens if one was recorded
- * before. The exit status of the process is the last run's. Throws a ValueError
+ * before. The exit status of the process is the last run's. A fork()ed child
+ * that ends does not run it. Descriptors the process inherited stay open (a
+ * stream's read buffer is lost with its request: set it to 0 to read exactly
+ * what is consumed); resource limits are not reset. Throws a ValueError
  * if $script is not a readable file, an Error unless the SAPI is the CLI.
  */
 function run_next(string $script): void {}

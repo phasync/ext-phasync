@@ -874,6 +874,7 @@ static void phasync_req_rshutdown(void)
  * (cwd, umask, signal mask, alarm) is put back to its start-up value between
  * runs. */
 static char *phasync_next_script;               /* malloc'd; one-shot */
+static pid_t phasync_next_pid;                  /* the process that recorded it: a forked child that ends does not rerun it */
 static bool phasync_next_cli, phasync_next_running;
 static void (*phasync_next_flush_prev)(void *server_context);
 static char phasync_next_cwd[MAXPATHLEN];
@@ -883,8 +884,30 @@ static int phasync_next_status;
 static void phasync_next_flush(void *server_context);
 static void phasync_next_exit(void);
 
+/* php_module_shutdown() sets a static flag that makes php_verror() prefix warnings
+ * with "PHP Shutdown:". The lifecycles run inside it, so the flag is located by
+ * decoding php_during_module_shutdown() (x86-64: movzbl rel32(%rip),%eax) and cleared
+ * while they run. If the decode fails, run_next() throws. */
+static volatile bool *phasync_next_flag;
+
+static void phasync_next_locate_flag(void)
+{
+#if defined(__x86_64__)
+	const unsigned char *p = (const unsigned char *) php_during_module_shutdown;
+	int32_t rel;
+	if (p[0] == 0xf3 && p[1] == 0x0f && p[2] == 0x1e && p[3] == 0xfa) {
+		p += 4;
+	}
+	if (p[0] == 0x0f && p[1] == 0xb6 && p[2] == 0x05) {
+		memcpy(&rel, p + 3, sizeof(rel));
+		phasync_next_flag = (volatile bool *) (p + 7 + rel);
+	}
+#endif
+}
+
 static void phasync_next_minit(void)
 {
+	phasync_next_locate_flag();
 	if (!(phasync_next_cli = strcmp(sapi_module.name, "cli") == 0)) {
 		return;
 	}
@@ -932,6 +955,7 @@ static void phasync_next_run(void)
 	int status = EG(exit_status), original = status;
 
 	phasync_next_running = true;
+	*phasync_next_flag = false;
 	zend_interned_strings_switch_storage(1);   /* php_module_shutdown() has switched to the permanent ones */
 	while (phasync_next_script) {
 		zend_file_handle fh;
@@ -955,19 +979,32 @@ static void phasync_next_run(void)
 		SG(request_info).no_headers = 1;
 		phasync_next_stdio();
 		CG(skip_shebang) = 1;
-		zend_stream_init_filename(&fh, script);
-		fh.primary_script = 1;
-		php_execute_script(&fh);
-		zend_destroy_file_handle(&fh);
+		/* a FILE* like do_cli's, not a stream resource: the request looks like a first one */
+		FILE *fp = fopen(script, "rb");
+		if (fp) {
+			zend_stream_init_fp(&fh, fp, script);
+			fh.primary_script = 1;
+			php_execute_script(&fh);
+			zend_destroy_file_handle(&fh);
+		} else {
+			fprintf(stderr, "Could not open input file: %s\n", script);
+			EG(exit_status) = 1;
+		}
 		php_request_shutdown(NULL);
 		status = EG(exit_status);
 		free(script);
 	}
 	zend_interned_strings_switch_storage(0);
+	*phasync_next_flag = true;
 	phasync_next_running = false;
 	if (status != original) {
 		/* main() returns do_cli()'s status: the last run's is put in its place once everything else has shut down */
 		phasync_next_status = status;
+		/* an atexit handler of this library runs when it is unloaded, in the middle of the module shutdown (and the code is gone
+		 * by exit): one more reference keeps it loaded until the process ends */
+		Dl_info info;
+		dladdr((void *)phasync_next_exit, &info);
+		dlopen(info.dli_fname, RTLD_NOW);
 		atexit(phasync_next_exit);
 	}
 }
@@ -981,7 +1018,7 @@ static void phasync_next_exit(void)
 static void phasync_next_flush(void *server_context)
 {
 	phasync_next_flush_prev(server_context);
-	if (php_during_module_shutdown() && !phasync_next_running && phasync_next_script) {
+	if (php_during_module_shutdown() && !phasync_next_running && phasync_next_script && phasync_next_pid == getpid()) {
 		phasync_next_run();
 	}
 }
@@ -1000,10 +1037,15 @@ ZEND_FUNCTION(phasync_ext_run_next)
 		zend_throw_error(NULL, "phasync\\ext\\run_next() requires the CLI SAPI (this is %s)", sapi_module.name);
 		RETURN_THROWS();
 	}
+	if (!phasync_next_flag) {
+		zend_throw_error(NULL, "phasync\\ext\\run_next() is not supported on this platform");
+		RETURN_THROWS();
+	}
 	if (!expand_filepath(ZSTR_VAL(script), resolved) || stat(resolved, &st) != 0 || !S_ISREG(st.st_mode) || access(resolved, R_OK) != 0) {
 		zend_argument_value_error(1, "must be a readable file, \"%s\" is not", resolved);
 		RETURN_THROWS();
 	}
 	free(phasync_next_script);
 	phasync_next_script = strdup(resolved);
+	phasync_next_pid = getpid();
 }
