@@ -138,9 +138,8 @@ function manage(\Closure $task, Poller $poller, \Closure $sleep, string $timeout
  *
  * - name(): string (required): the SAPI's name, as php_sapi_name() reports it
  *   inside the request.
- * - output(): resource (required): once at the start: the stream output leaving the
- *   output buffers is written to, such as one end of a stream_socket_pair() the
- *   server pumps to the client. A failed write means the client is gone:
+ * - write(string $data): bool (required): output leaving the output buffers, piece
+ *   by piece, as a SAPI's ub_write gets it. false means the client is gone:
  *   connection_aborted() becomes true and later output is discarded. The code is
  *   not stopped (ignore_user_abort() changes nothing): it ends when it finishes
  *   or when it checks connection_aborted().
@@ -149,9 +148,11 @@ function manage(\Closure $task, Poller $poller, \Closure $sleep, string $timeout
  *   any. $headers are raw lines as headers_list() returns them; $statusLine is
  *   set by header('HTTP/1.1 ...').
  * - flush(): void: flush() was called.
- * - input(): ?resource: once at the start: the stream the request body is read
- *   from, to its end, when the code reads php://input or calls
- *   request_parse_body(). Without it, or with null, the request has no body.
+ * - read(int $length): string: up to $length bytes of the request body, '' at
+ *   its end, when the code reads php://input or calls request_parse_body();
+ *   called again until it has enough or gets ''. Without it, the request has no
+ *   body. php://input is blocking under every SAPI (stream_set_blocking()
+ *   changes nothing), so a read() that has to wait suspends the request.
  * - request_info(): array: called once at the start: 'method', 'content_type'
  *   and 'content_length' of the request, as php://input and
  *   request_parse_body() need them, and 'query_string' and 'request_uri'.
@@ -160,9 +161,9 @@ function manage(\Closure $task, Poller $poller, \Closure $sleep, string $timeout
  *
  * Methods other than the three required are used only if present. They run
  * outside the request (their own output goes where it would without sapi()),
- * in the Scope the sapi() call was made in. They are called from inside PHP's
- * request handling and should not wait; the waiting belongs to the streams,
- * read and written as any stream.
+ * in the Scope the sapi() call was made in. write() and read() may wait for the
+ * client, suspending the request's coroutine; the others are called from inside
+ * PHP's request handling and should not wait.
  *
  * When $code returns or throws, the output buffers are flushed (removable or
  * not) and the headers are sent if nothing sent them. An uncaught exception

@@ -111,8 +111,8 @@ typedef struct phasync_request {
 	uint32_t refcount;                 /* the sapi() call + each fiber of the request */
 	bool ended;                        /* output of fibers still running is discarded */
 	zend_string *name;                 /* PHP_SAPI and php_sapi_name() while installed */
-	zval sapi, out, in;
-	zend_function *m_send_headers, *m_flush, *m_connection_aborted;
+	zval sapi;
+	zend_function *m_write, *m_read, *m_send_headers, *m_flush, *m_connection_aborted;
 	phasync_req_state st;              /* the live globals while the request is not installed */
 	php_stream *body_seen;             /* the body stream read_post() last filled... */
 	HashTable *bodies_replaced;        /* ...and earlier ones PHP replaced */
@@ -369,8 +369,6 @@ static void phasync_req_release(phasync_request *r)
 	}
 	phasync_req_state_free(&r->st);
 	zval_ptr_dtor(&r->sapi);
-	zval_ptr_dtor(&r->out);
-	zval_ptr_dtor(&r->in);
 	zend_string_release(r->name);
 	efree(r);
 	phasync_req_count--;
@@ -424,24 +422,14 @@ static void phasync_req_aborted(void)
 	php_output_set_status(PHP_OUTPUT_DISABLED);
 }
 
-/* The stream a $sapi->output()/input() zval holds; NULL once the server closed it. */
-static php_stream *phasync_req_stream(zval *zv)
-{
-	return Z_TYPE_P(zv) == IS_RESOURCE
-		? zend_fetch_resource2(Z_RES_P(zv), NULL, php_file_le_stream(), php_file_le_pstream())
-		: NULL;
-}
-
 /* ---- the SAPI callbacks, routed to the installed request's $sapi ---- */
 
-/* Output goes to $sapi->output() as a SAPI writes its connection: whole, or the
- * client is gone. A failed write raises no notice of the stream's own. */
+/* Output goes to $sapi->write() as a SAPI writes its connection: whole, or the
+ * client is gone (false). */
 static size_t phasync_req_ub_write(const char *str, size_t len)
 {
 	phasync_request *r = phasync_req_cur;
-	php_stream *s;
-	ssize_t n;
-	uint32_t flags;
+	zval arg, rv;
 
 	if (!r) {
 		return phasync_req_ub_write_prev(str, len);
@@ -449,17 +437,15 @@ static size_t phasync_req_ub_write(const char *str, size_t len)
 	if (r->ended) {
 		return len;
 	}
-	if (!(s = phasync_req_stream(&r->out))) {
+	ZVAL_STRINGL_FAST(&arg, str, len);
+	phasync_req_call(r, r->m_write, &rv, 1, &arg);
+	zval_ptr_dtor(&arg);
+	if (Z_TYPE(rv) == IS_FALSE) {
 		phasync_req_aborted();
-		return len;
+	} else if (Z_TYPE(rv) != IS_TRUE && Z_TYPE(rv) != IS_UNDEF) {
+		zend_type_error("%s::write() must return a bool, %s returned", ZSTR_VAL(Z_OBJCE(r->sapi)->name), zend_zval_value_name(&rv));
 	}
-	flags = s->flags;
-	s->flags |= PHP_STREAM_FLAG_SUPPRESS_ERRORS;
-	n = php_stream_write(s, str, len);
-	s->flags = (s->flags & ~PHP_STREAM_FLAG_SUPPRESS_ERRORS) | (flags & PHP_STREAM_FLAG_SUPPRESS_ERRORS);
-	if (n < 0 || (size_t) n < len) {
-		phasync_req_aborted();
-	}
+	zval_ptr_dtor(&rv);
 	return len;
 }
 
@@ -496,7 +482,6 @@ static int phasync_req_send_headers(sapi_headers_struct *h)
 static void phasync_req_flush(void *server_context)
 {
 	phasync_request *r = phasync_req_cur;
-	php_stream *s;
 	zval rv;
 
 	if (!r) {
@@ -507,20 +492,17 @@ static void phasync_req_flush(void *server_context)
 	}
 	/* A SAPI's flush sends the headers itself (#14): sapi_flush() does not. */
 	sapi_send_headers();
-	if (!r->ended && (s = phasync_req_stream(&r->out))) {
-		php_stream_flush(s);
-	}
 	if (r->m_flush && !r->ended) {
 		phasync_req_call(r, r->m_flush, &rv, 0, NULL);
 		zval_ptr_dtor(&rv);
 	}
 }
 
-/* Like a SAPI's read_post: up to len bytes of $sapi->input(), fewer only at its end. */
+/* Like a SAPI's read_post: up to len bytes of $sapi->read(), fewer only at the
+ * body's end, where read() returns ''. */
 static size_t phasync_req_read_post(char *buf, size_t len)
 {
 	phasync_request *r = phasync_req_cur;
-	php_stream *s;
 	size_t n = 0;
 
 	if (!r) {
@@ -536,14 +518,23 @@ static size_t phasync_req_read_post(char *buf, size_t len)
 		}
 		r->body_seen = SG(request_info).request_body;
 	}
-	while (n < len && !r->ended && (s = phasync_req_stream(&r->in))) {
-		uint32_t flags = s->flags;
-		ssize_t got;
+	while (n < len && !r->ended && r->m_read) {
+		zval arg, rv;
+		size_t got;
 
-		s->flags |= PHP_STREAM_FLAG_SUPPRESS_ERRORS;
-		got = php_stream_read(s, buf + n, len - n);
-		s->flags = (s->flags & ~PHP_STREAM_FLAG_SUPPRESS_ERRORS) | (flags & PHP_STREAM_FLAG_SUPPRESS_ERRORS);
-		if (got <= 0) {
+		ZVAL_LONG(&arg, (zend_long) (len - n));
+		phasync_req_call(r, r->m_read, &rv, 1, &arg);
+		if (Z_TYPE(rv) != IS_STRING) {
+			if (Z_TYPE(rv) != IS_UNDEF) {
+				zend_type_error("%s::read() must return a string, %s returned", ZSTR_VAL(Z_OBJCE(r->sapi)->name), zend_zval_value_name(&rv));
+			}
+			zval_ptr_dtor(&rv);
+			break;
+		}
+		got = MIN(Z_STRLEN(rv), len - n);
+		memcpy(buf + n, Z_STRVAL(rv), got);
+		zval_ptr_dtor(&rv);
+		if (got == 0) {
 			break;
 		}
 		n += got;
@@ -617,23 +608,6 @@ static void phasync_req_fiber_destroy(zend_fiber_context *ctx)
 }
 
 /* ---- sapi() ---- */
-
-/* $sapi->output() and $sapi->input(): the body streams, asked for once. */
-static void phasync_req_streams(phasync_request *r, zend_function *m_output, zend_function *m_input)
-{
-	phasync_req_call(r, m_output, &r->out, 0, NULL);
-	if (!EG(exception) && m_input) {
-		phasync_req_call(r, m_input, &r->in, 0, NULL);
-	}
-	if (EG(exception)) {
-		return;
-	}
-	if (!phasync_req_stream(&r->out)) {
-		zend_type_error("%s::output() must return a stream, %s returned", ZSTR_VAL(Z_OBJCE(r->sapi)->name), zend_zval_value_name(&r->out));
-	} else if (m_input && Z_TYPE(r->in) != IS_NULL && !phasync_req_stream(&r->in)) {
-		zend_type_error("%s::input() must return a stream or null, %s returned", ZSTR_VAL(Z_OBJCE(r->sapi)->name), zend_zval_value_name(&r->in));
-	}
-}
 
 /* request_info(): ['method' => ..., 'content_type' => ..., 'content_length' => ...,
  * 'query_string' => ..., 'request_uri' => ...] describes the request, as a SAPI's
@@ -715,7 +689,7 @@ ZEND_FUNCTION(phasync_ext_sapi)
 	zend_object *code;
 	zend_class_entry *ce;
 	phasync_request *r;
-	zend_function *m_name, *m_output, *m_input, *m_request_info;
+	zend_function *m_name, *m_write, *m_request_info;
 	zend_fiber_context *ctx = EG(current_fiber_context);
 
 	ZEND_PARSE_PARAMETERS_START(2, 2)
@@ -730,13 +704,14 @@ ZEND_FUNCTION(phasync_ext_sapi)
 	ce = Z_OBJCE_P(sapi);
 #define PHASYNC_REQ_METHOD(name) zend_hash_str_find_ptr_lc(&ce->function_table, ZEND_STRL(name))
 	m_name = PHASYNC_REQ_METHOD("name");
-	m_output = PHASYNC_REQ_METHOD("output");
-	m_input = PHASYNC_REQ_METHOD("input");
-	if (!m_name || !m_output || !PHASYNC_REQ_METHOD("send_headers")) {
-		zend_argument_value_error(2, "must have the methods name(), output() and send_headers()");
+	m_write = PHASYNC_REQ_METHOD("write");
+	if (!m_name || !m_write || !PHASYNC_REQ_METHOD("send_headers")) {
+		zend_argument_value_error(2, "must have the methods name(), write() and send_headers()");
 		RETURN_THROWS();
 	}
 	r = ecalloc(1, sizeof(*r));
+	r->m_write = m_write;
+	r->m_read = PHASYNC_REQ_METHOD("read");
 	r->m_send_headers = PHASYNC_REQ_METHOD("send_headers");
 	r->m_flush = PHASYNC_REQ_METHOD("flush");
 	r->m_connection_aborted = PHASYNC_REQ_METHOD("connection_aborted");
@@ -757,9 +732,6 @@ ZEND_FUNCTION(phasync_ext_sapi)
 		r->name = zend_string_copy(Z_STR(name));
 	}
 	zval_ptr_dtor(&name);
-	if (!EG(exception)) {
-		phasync_req_streams(r, m_output, m_input);
-	}
 	if (m_request_info && !EG(exception)) {
 		phasync_req_request_info(r, m_request_info);
 	}

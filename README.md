@@ -151,7 +151,7 @@ function manage(
 
 function sapi(
     \Closure $code,             // one request; its return value is returned
-    object   $sapi,             // where its response goes: name(), output(), send_headers(), ...
+    object   $sapi,             // where its response goes: name(), write(), send_headers(), ...
 ): mixed;
 
 function set_preempt_function(?\Closure $fn, float $minInterval = 0.1): ?\Closure;
@@ -419,14 +419,14 @@ What leaves the request goes to `$sapi` as a SAPI would receive it:
 | Method | |
 |---|---|
 | `name(): string` | required; what `PHP_SAPI` and `php_sapi_name()` report inside the request |
-| `output(): resource` | required; the stream the response body is written to |
+| `write(string $data): bool` | required; the response body, piece by piece; `false`: the client is gone |
 | `send_headers(int $status, ?string $statusLine, array $headers): void` | required; once, before the first output |
-| `input(): ?resource` | the request body |
+| `read(int $length): string` | the request body, `''` at its end |
 | `request_info(): array` | `method`, `content_type`, `content_length`, `query_string`, `request_uri`: what `php://input` and `request_parse_body()` need |
 | `flush()`, `connection_aborted(): bool` | `flush()` and the client's departure |
 
 `exit()` is not intercepted: it ends the script as under any SAPI, after the request's output has
-reached `$sapi`. A failed write to `output()` means the client is gone: `connection_aborted()` turns
+reached `$sapi`. `write()` and `read()` may wait for the client, suspending the request. `write()` returning `false` means the client is gone: `connection_aborted()` turns
 true and later output is discarded; the code is not stopped. Nesting throws. The full contract is the
 docblock in [`phasync.stub.php`](phasync.stub.php).
 
