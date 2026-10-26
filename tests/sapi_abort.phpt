@@ -1,5 +1,5 @@
 --TEST--
-sapi(): a client gone (a failed write to output(), or connection_aborted() saying so) sets connection_aborted() and discards later output; the code is not stopped
+sapi(): a client gone (write() returning false, or connection_aborted() saying so) sets connection_aborted() and discards later output; the code is not stopped
 --EXTENSIONS--
 phasync
 --FILE--
@@ -7,7 +7,7 @@ phasync
 require __DIR__ . '/sink.inc';
 use function phasync\ext\sapi;
 
-// ub_write() false: aborted, later output discarded, the code runs on.
+// write() false: aborted, later output discarded, the code runs on.
 $s = new Sink; $s->gone = true;
 $seen = null;
 sapi(function () use (&$seen) {

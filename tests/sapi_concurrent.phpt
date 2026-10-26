@@ -110,4 +110,4 @@ string(4) "done"
 caught: up
 string(7) "partial"
 Error: phasync\ext\sapi() cannot be nested
-ValueError: phasync\ext\sapi(): Argument #2 ($sapi) must have the methods name(), output() and send_headers()
+ValueError: phasync\ext\sapi(): Argument #2 ($sapi) must have the methods name(), write() and send_headers()

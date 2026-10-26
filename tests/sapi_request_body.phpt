@@ -1,5 +1,5 @@
 --TEST--
-sapi(): php://input, request_parse_body() and uploads read the request's own body from $sapi->input(); uploads not moved are deleted when it ends
+sapi(): php://input, request_parse_body() and uploads read the request's own body from $sapi->read(); uploads not moved are deleted when it ends
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -56,12 +56,8 @@ $s->info = ['method' => 'POST', 'content_type' => 'application/x-www-form-urlenc
 sapi(function () use (&$got) { $got = [file_get_contents('php://input'), request_parse_body()[0]]; }, $s);
 var_dump($got);
 
-// Without input() the request has no body.
-$plain = new class { public function name(): string { return 'test'; } public function output() { return fopen('php://memory', 'w'); } public function send_headers(int $s, ?string $l, array $h): void {} };
-sapi(function () use (&$got) { $got = file_get_contents('php://input'); }, $plain);
-var_dump($got);
-$plain = new class extends Sink { public function input() { return null; } };
-$plain->body = 'unread';
+// Without read() the request has no body.
+$plain = new class { public function name(): string { return 'test'; } public function write(string $d): bool { return true; } public function send_headers(int $s, ?string $l, array $h): void {} };
 sapi(function () use (&$got) { $got = file_get_contents('php://input'); }, $plain);
 var_dump($got);
 ?>
@@ -102,5 +98,4 @@ array(2) {
   array(0) {
   }
 }
-string(0) ""
 string(0) ""

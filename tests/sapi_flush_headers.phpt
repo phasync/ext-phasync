@@ -19,7 +19,7 @@ function logging_sapi(array &$log): object {
 	return new class($log) {
 		public function __construct(public array &$l) {}
 		public function name(): string { return "test"; }
-		public function output() { return SinkStream::open(function ($d) { $this->l[] = "write:$d"; }, 'w'); }
+		public function write(string $d): bool { $this->l[] = "write:$d"; return true; }
 		public function send_headers(int $s, ?string $sl, array $h): void { $this->l[] = "send_headers:$s"; }
 		public function flush(): void { $this->l[] = 'flush'; }
 	};

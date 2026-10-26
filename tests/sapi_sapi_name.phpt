@@ -22,7 +22,7 @@ echo $s->out;
 echo name_of(), "\n";
 
 try {
-    sapi(function () {}, new class { public function name(): int { return 1; } public function output() {} public function send_headers(int $s, ?string $l, array $h): void {} });
+    sapi(function () {}, new class { public function name(): int { return 1; } public function write(string $d): bool { return true; } public function send_headers(int $s, ?string $l, array $h): void {} });
 } catch (Throwable $e) { echo get_class($e), "\n"; }
 ?>
 --EXPECT--
