@@ -154,6 +154,8 @@ function sapi(
     object   $sapi,             // where its response goes: name(), write(), send_headers(), ...
 ): mixed;
 
+function run_next(string $script): void;   // CLI: run $script once more as a fresh request when this one ends
+
 function set_preempt_function(?\Closure $fn, float $minInterval = 0.1): ?\Closure;
 ```
 
@@ -432,6 +434,23 @@ discarded; with `ignore_user_abort()` off (the default), the request stops right
 no finally, like `exit()` -- and `sapi()` returns `null` to its caller, which continues; other
 requests running concurrently in the same worker (each `sapi()` call is its own coroutine) are
 unaffected. Nesting throws. The full contract is the docblock in [`phasync.stub.php`](phasync.stub.php).
+
+### Fresh request, same process: `run_next()`
+
+`run_next($script)` makes the CLI process, once the current script has ended, run `$script` as a new
+request in the same process: shutdown functions, destructors and output buffers of the first run
+finish, then statics, globals, declarations, constants, ini values, handlers and output buffers start
+over as in the first request, as under FPM. The opcache stays warm; no fork, no workers. A run that
+calls `run_next()` again is followed by another, so a script can restart itself for as long as it
+wants; the recording is used once. Whatever ended a run (`exit()`, a fatal error, an uncaught
+exception), the next run still happens, and the process exits with the last run's status.
+
+The working directory, umask, signal mask and `alarm()` are put back to what the process started
+with. `STDIN`, `STDOUT` and `STDERR` are defined again; descriptors 0-2 and every inherited descriptor
+stay open, so a socket passed as fd 3 can be served across runs: set `stream_set_read_buffer($s, 0)`
+to read exactly what is consumed, since a stream's read buffer is lost with its request. Resource
+limits are not reset, and a `fork()`ed child that ends does not run the next request. `$script` must be
+readable when called (a `ValueError` otherwise), and the SAPI must be the CLI (an `Error`).
 
 ### Preemption: `set_preempt_function()`
 
