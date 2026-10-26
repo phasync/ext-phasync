@@ -415,11 +415,11 @@ static void phasync_req_call(phasync_request *r, zend_function *fn, zval *rv, ui
 	phasync_req_restore_exception(ex);
 }
 
-/* The client is gone: later output is discarded. The code is not stopped. */
+/* The client is gone: later output is discarded, and, unless ignore_user_abort(),
+ * the request ends here (zend_bailout()) as it does under every other SAPI. */
 static void phasync_req_aborted(void)
 {
-	PG(connection_status) = PHP_CONNECTION_ABORTED;
-	php_output_set_status(PHP_OUTPUT_DISABLED);
+	php_handle_aborted_connection();
 }
 
 /* ---- the SAPI callbacks, routed to the installed request's $sapi ---- */
@@ -691,6 +691,7 @@ ZEND_FUNCTION(phasync_ext_sapi)
 	phasync_request *r;
 	zend_function *m_name, *m_write, *m_request_info;
 	zend_fiber_context *ctx = EG(current_fiber_context);
+	bool bailed = false;
 
 	ZEND_PARSE_PARAMETERS_START(2, 2)
 		Z_PARAM_OBJ_OF_CLASS(code, zend_ce_closure)
@@ -764,15 +765,32 @@ ZEND_FUNCTION(phasync_ext_sapi)
 			zval fn;
 
 			ZVAL_OBJ(&fn, code);
-			call_user_function(NULL, NULL, &fn, &retval, 0, NULL);
+			/* A bailout (a fatal error, or the client gone without ignore_user_abort())
+			 * must still end the request as phasync_req_finalize() below does -- the
+			 * installed request and the fiber-membership entry are otherwise left
+			 * dangling for whatever runs next (e.g. the CLI's own read_post drain at
+			 * the real request's shutdown, issue #121) -- then the bailout continues. */
+			zend_try {
+				call_user_function(NULL, NULL, &fn, &retval, 0, NULL);
+			} zend_catch {
+				bailed = true;
+			} zend_end_try();
 		}
-		phasync_req_finalize(r);
+		/* finalize() flushes whatever is still buffered: that write can abort too. */
+		zend_try {
+			phasync_req_finalize(r);
+		} zend_catch {
+			bailed = true;
+		} zend_end_try();
 	}
 	zend_hash_index_del(&phasync_req_fibers, PHASYNC_REQ_KEY(ctx));
 	phasync_req_install(NULL);
 	r->ended = true;
 	phasync_req_release(r);           /* membership */
 	phasync_req_release(r);           /* this call */
+	if (bailed) {
+		zend_bailout();
+	}
 	if (EG(exception)) {
 		zval_ptr_dtor(&retval);
 		RETURN_THROWS();

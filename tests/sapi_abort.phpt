@@ -1,21 +1,11 @@
 --TEST--
-sapi(): a client gone (write() returning false, or connection_aborted() saying so) sets connection_aborted() and discards later output; the code is not stopped
+sapi(): a client gone (write() returning false, or connection_aborted() saying so) sets connection_aborted(); with ignore_user_abort() the code runs on and discards later output (sapi_abort_stops.phpt covers the default, which stops the request)
 --EXTENSIONS--
 phasync
 --FILE--
 <?php
 require __DIR__ . '/sink.inc';
 use function phasync\ext\sapi;
-
-// write() false: aborted, later output discarded, the code runs on.
-$s = new Sink; $s->gone = true;
-$seen = null;
-sapi(function () use (&$seen) {
-    echo "one";
-    echo "two";
-    $seen = 'ran on';
-}, $s);
-var_dump($s->out, $seen);
 
 // With ignore_user_abort(true) the code runs on, without output.
 $s = new Sink; $s->gone = true;
@@ -37,8 +27,6 @@ sapi(function () use (&$log) { $log = [connection_aborted(), connection_status()
 var_dump($log);
 ?>
 --EXPECT--
-string(3) "one"
-string(6) "ran on"
 string(3) "one"
 array(2) {
   [0]=>
