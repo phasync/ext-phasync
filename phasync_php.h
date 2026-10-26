@@ -89,6 +89,9 @@
 #include <dirent.h>
 #include <sys/wait.h>
 #include <dlfcn.h>
+#ifdef __ELF__
+#include <link.h>
+#endif
 #include <sys/file.h>
 #include <sys/uio.h>
 

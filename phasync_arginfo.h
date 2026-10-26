@@ -1,6 +1,13 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 358153ccad1220570401dc30642642a7b4e315ce */
+ * Stub hash: 5ccaae68d1e29a786b26f6cb25a8f9a05bc47af0 */
 
+/* Hand-maintained: never regenerate it with gen_stub (PHP 8.3 has no frameless
+ * infos in ZEND_RAW_FENTRY, PHASYNC_RAW_FENTRY adapts). */
+#if PHP_VERSION_ID >= 80400
+# define PHASYNC_RAW_FENTRY ZEND_RAW_FENTRY
+#else
+# define PHASYNC_RAW_FENTRY(zend_name, name, arg_info, flags, frameless_infos, doc) ZEND_RAW_FENTRY(zend_name, name, arg_info, flags)
+#endif
 /* Hand-maintained: never regenerate it with gen_stub (PHP 8.3 has no frameless
  * infos in ZEND_RAW_FENTRY, PHASYNC_RAW_FENTRY adapts). */
 #if PHP_VERSION_ID >= 80400

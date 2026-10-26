@@ -884,31 +884,87 @@ static int phasync_next_status;
 static bool phasync_next_title;                 /* do_cli()'s PHP_CLI_PROCESS_TITLE, defined again in every run */
 static void phasync_next_flush(void *server_context);
 static void phasync_next_exit(void);
+static void phasync_next_status_on_exit(void);
 
-/* php_module_shutdown() sets a static flag that makes php_verror() prefix warnings
- * with "PHP Shutdown:". The lifecycles run inside it, so the flag is located by
- * decoding php_during_module_shutdown() (x86-64: movzbl rel32(%rip),%eax) and cleared
- * while they run. If the decode fails, run_next() throws. */
+/* php_module_shutdown() sets main.c's static module_shutdown, read only by php_verror()
+ * to prefix warnings with "PHP Shutdown:". The runs happen inside it, so the flag is
+ * cleared while they run. It has no symbol: the first time, each byte that is 1 in the
+ * writable data of the object holding php_during_module_shutdown() is set to 0 in turn,
+ * and the one that makes php_during_module_shutdown() return false is the flag. Signals
+ * are blocked meanwhile and the engine globals skipped (this extension's threads write
+ * EG(vm_interrupt)); RELRO is read-only. */
 static volatile bool *phasync_next_flag;
+
+#ifdef __ELF__
+static bool phasync_next_skip(uintptr_t a)
+{
+#ifndef ZTS
+	if ((a >= (uintptr_t) &executor_globals && a < (uintptr_t) &executor_globals + sizeof(executor_globals))
+		|| (a >= (uintptr_t) &compiler_globals && a < (uintptr_t) &compiler_globals + sizeof(compiler_globals))
+		|| (a >= (uintptr_t) &core_globals && a < (uintptr_t) &core_globals + sizeof(core_globals))
+		|| (a >= (uintptr_t) &sapi_globals && a < (uintptr_t) &sapi_globals + sizeof(sapi_globals))) {
+		return true;
+	}
+#endif
+	return false;
+}
+
+static int phasync_next_scan(struct dl_phdr_info *info, size_t size, void *data)
+{
+	uintptr_t fn = (uintptr_t) php_during_module_shutdown, relro_lo = 0, relro_hi = 0;
+	bool holds = false;
+
+	for (int i = 0; i < info->dlpi_phnum; i++) {
+		const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+		uintptr_t lo = info->dlpi_addr + ph->p_vaddr;
+		if (ph->p_type == PT_LOAD && fn >= lo && fn < lo + ph->p_memsz) {
+			holds = true;
+		} else if (ph->p_type == PT_GNU_RELRO) {
+			relro_lo = lo;
+			relro_hi = lo + ph->p_memsz;
+		}
+	}
+	if (!holds) {
+		return 0;
+	}
+	for (int i = 0; i < info->dlpi_phnum; i++) {
+		const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+		uintptr_t lo = info->dlpi_addr + ph->p_vaddr;
+		if (ph->p_type != PT_LOAD || !(ph->p_flags & PF_W)) {
+			continue;
+		}
+		for (uintptr_t a = lo; a < lo + ph->p_memsz; a++) {
+			volatile unsigned char *b = (volatile unsigned char *) a;
+			if (*b != 1 || (a >= relro_lo && a < relro_hi) || phasync_next_skip(a)) {
+				continue;
+			}
+			*b = 0;
+			bool set = php_during_module_shutdown();
+			*b = 1;
+			if (!set) {
+				*(volatile bool **) data = (volatile bool *) b;
+				return 1;
+			}
+		}
+	}
+	return 1;
+}
+#endif
 
 static void phasync_next_locate_flag(void)
 {
-#if defined(__x86_64__)
-	const unsigned char *p = (const unsigned char *) php_during_module_shutdown;
-	int32_t rel;
-	if (p[0] == 0xf3 && p[1] == 0x0f && p[2] == 0x1e && p[3] == 0xfa) {
-		p += 4;
-	}
-	if (p[0] == 0x0f && p[1] == 0xb6 && p[2] == 0x05) {
-		memcpy(&rel, p + 3, sizeof(rel));
-		phasync_next_flag = (volatile bool *) (p + 7 + rel);
-	}
+#ifdef __ELF__
+	sigset_t all, old;
+
+	sigfillset(&all);
+	pthread_sigmask(SIG_SETMASK, &all, &old);
+	dl_iterate_phdr(phasync_next_scan, (void *) &phasync_next_flag);
+	pthread_sigmask(SIG_SETMASK, &old, NULL);
 #endif
 }
 
 static void phasync_next_minit(void)
 {
-	phasync_next_locate_flag();
 	if (!(phasync_next_cli = strcmp(sapi_module.name, "cli") == 0)) {
 		return;
 	}
@@ -955,6 +1011,15 @@ static void phasync_next_run(void)
 {
 	int status = EG(exit_status), original = status;
 
+	if (!phasync_next_flag) {
+		phasync_next_locate_flag();
+	}
+	if (!phasync_next_flag) {
+		fprintf(stderr, "phasync\\ext\\run_next(): PHP's module-shutdown flag was not found; the next run is not started\n");
+		phasync_next_status = 255;
+		phasync_next_status_on_exit();
+		return;
+	}
 	phasync_next_running = true;
 	*phasync_next_flag = false;
 	zend_interned_strings_switch_storage(1);   /* php_module_shutdown() has switched to the permanent ones */
@@ -1007,15 +1072,20 @@ static void phasync_next_run(void)
 	*phasync_next_flag = true;
 	phasync_next_running = false;
 	if (status != original) {
-		/* main() returns do_cli()'s status: the last run's is put in its place once everything else has shut down */
 		phasync_next_status = status;
-		/* an atexit handler of this library runs when it is unloaded, in the middle of the module shutdown (and the code is gone
-		 * by exit): one more reference keeps it loaded until the process ends */
-		Dl_info info;
-		dladdr((void *)phasync_next_exit, &info);
-		dlopen(info.dli_fname, RTLD_NOW);
-		atexit(phasync_next_exit);
+		phasync_next_status_on_exit();
 	}
+}
+
+/* main() returns do_cli()'s status: phasync_next_status is put in its place once everything else has shut down */
+static void phasync_next_status_on_exit(void)
+{
+	/* an atexit handler of this library runs when it is unloaded, in the middle of the module shutdown (and the code is gone
+	 * by exit): one more reference keeps it loaded until the process ends */
+	Dl_info info;
+	dladdr((void *)phasync_next_exit, &info);
+	dlopen(info.dli_fname, RTLD_NOW);
+	atexit(phasync_next_exit);
 }
 
 static void phasync_next_exit(void)
@@ -1046,10 +1116,10 @@ ZEND_FUNCTION(phasync_ext_run_next)
 		zend_throw_error(NULL, "phasync\\ext\\run_next() requires the CLI SAPI (this is %s)", sapi_module.name);
 		RETURN_THROWS();
 	}
-	if (!phasync_next_flag) {
-		zend_throw_error(NULL, "phasync\\ext\\run_next() is not supported on this platform");
-		RETURN_THROWS();
-	}
+#ifndef __ELF__
+	zend_throw_error(NULL, "phasync\\ext\\run_next() is not supported on this platform");
+	RETURN_THROWS();
+#endif
 	if (!expand_filepath(ZSTR_VAL(script), resolved) || stat(resolved, &st) != 0 || !S_ISREG(st.st_mode) || access(resolved, R_OK) != 0) {
 		zend_argument_value_error(1, "must be a readable file, \"%s\" is not", resolved);
 		RETURN_THROWS();

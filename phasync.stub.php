@@ -195,7 +195,8 @@ function sapi(\Closure $code, object $sapi): mixed {}
  * that ends does not run it. Descriptors the process inherited stay open (a
  * stream's read buffer is lost with its request: set it to 0 to read exactly
  * what is consumed); resource limits are not reset. Throws a ValueError
- * if $script is not a readable file, an Error unless the SAPI is the CLI.
+ * if $script is not a readable file, an Error unless the SAPI is the CLI or on a
+ * system without ELF binaries (macOS, Windows).
  */
 function run_next(string $script): void {}
 
