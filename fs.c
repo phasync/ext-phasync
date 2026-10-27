@@ -541,11 +541,11 @@ static int phasync_vfs_open(sqlite3_vfs *vfs, const char *name, sqlite3_file *f,
 
 static int phasync_vfs_sleep(sqlite3_vfs *vfs, int us)
 {
-	if (phasync_sleep_handler() == NULL || EG(active_fiber) == NULL || phasync_from_c()) {
+	if (phasync_scope_top() == NULL || EG(active_fiber) == NULL || phasync_from_c()) {
 		return phasync_vfs_unix->xSleep(vfs, us);
 	}
 	if (!EG(exception)) {                /* pending (a cancellation): the retries run out at once */
-		phasync_call_sleep(phasync_sleep_handler(), us);
+		phasync_call_sleep(us);
 	}
 	return us;
 }

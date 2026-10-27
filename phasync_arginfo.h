@@ -120,17 +120,6 @@ static zend_class_entry *phasync_register_class(zend_class_entry *ce, uint32_t f
 #endif
 }
 
-/* The request's poller (suspension.c creates it): not instantiable from PHP. */
-static zend_class_entry *register_class_phasync_ext_internal_Poller(void)
-{
-	zend_class_entry ce, *class_entry;
-
-	INIT_NS_CLASS_ENTRY(ce, "phasync\\ext\\internal", "Poller", NULL);
-	class_entry = phasync_register_class(&ce, ZEND_ACC_FINAL|ZEND_ACC_EXPLICIT_ABSTRACT_CLASS|ZEND_ACC_NO_DYNAMIC_PROPERTIES|ZEND_ACC_NOT_SERIALIZABLE);
-
-	return class_entry;
-}
-
 static zend_class_entry *register_class_phasync_ext_Suspension(zend_class_entry *class_entry_Exception)
 {
 	zend_class_entry ce, *class_entry;

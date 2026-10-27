@@ -40,11 +40,9 @@ static bool phasync_cannot_suspend(void)
 	return true;
 }
 
-/* Sleep usec microseconds in the managed fiber (the handler is phasync_sleep_handler()'s
- * marker); -1 if it threw. */
-static int phasync_call_sleep(zval *handler, zend_long usec)
+/* Sleep usec microseconds in the managed fiber; -1 if it threw. */
+static int phasync_call_sleep(zend_long usec)
 {
-	(void) handler;
 	if (phasync_cannot_suspend()) {
 		return -1;
 	}
@@ -294,7 +292,7 @@ static bool phasync_inflight_drain(php_stream *stream, phasync_inflight *f)
 	phasync_stream_forget(stream);
 	f->closing = true;
 	f->closer = p;
-	GC_ADDREF(&p->std);
+	p->refs++;
 	l->closing = stream;
 	l->closing_p = p;
 	if (!phasync_unwinding()) {
@@ -312,7 +310,7 @@ static bool phasync_inflight_drain(php_stream *stream, phasync_inflight *f)
 			break;                   /* the unwind stays pending */
 		}
 		if ((f->closer_slot = phasync_get_slot(p)) < 0
-		 || phasync_park(p, f->closer_slot, INFINITY, NULL) != PHASYNC_WAIT_READY) {
+		 || phasync_park(p, f->closer_slot, INFINITY) != PHASYNC_WAIT_READY) {
 			if (EG(exception) == NULL) {
 				zend_error_noreturn(E_ERROR, "phasync: unable to wait for the coroutines using a stream being closed");
 			}
@@ -328,7 +326,7 @@ static bool phasync_inflight_drain(php_stream *stream, phasync_inflight *f)
 	}
 	l->closing = NULL;
 	f->closer = NULL;
-	OBJ_RELEASE(&p->std);
+	phasync_poller_release(p);
 	if (f->hold) {
 		phasync_hold_drop(f);
 	}
@@ -408,7 +406,7 @@ static int phasync_wait_fd(int dir, php_stream *stream, php_socket_t fd, double 
 	if (stream != NULL && !phasync_inflight_enter(stream)) {
 		return PHASYNC_WAIT_CLOSED;
 	}
-	rc = phasync_poller_wait(s->poller, dir, stream, fd, timeout, s->timeout_ce, false);
+	rc = phasync_poller_wait(s->poller, dir, stream, fd, timeout, false);
 	if (stream == NULL) {
 		return rc;
 	}
@@ -1573,7 +1571,7 @@ typedef struct {
  * next op on the same descriptor fails. PHASYNC_WAIT_TIMEOUT/_ERROR as
  * phasync_wait_fd(). */
 static int phasync_select_wait(phasync_poller *p, int epfd, phasync_select_cand *cands, int ncands,
-                               double timeout, zend_class_entry *timeout_ce, int *closed)
+                               double timeout, int *closed)
 {
 	phasync_select_watch *watches = ncands ? safe_emalloc(ncands, sizeof(*watches), 0) : NULL;
 	int *widx = ncands ? safe_emalloc(ncands, sizeof(*widx), 0) : NULL;   /* cands[i] -> watches[], or -1 */
@@ -1610,9 +1608,9 @@ static int phasync_select_wait(phasync_poller *p, int epfd, phasync_select_cand 
 		zend_throw_error(NULL, "Unable to wait on the select() epoll instance: %s", strerror(errno));
 		rc = PHASYNC_WAIT_ERROR;
 	} else {
-		GC_ADDREF(&p->std);
-		rc = phasync_park(p, slot, timeout, timeout_ce);
-		OBJ_RELEASE(&p->std);
+		p->refs++;
+		rc = phasync_park(p, slot, timeout);
+		phasync_poller_release(p);
 	}
 
 	/* Settle: the epfd's own registration first (as phasync_wait_settle() does
@@ -1778,8 +1776,7 @@ static void phasync_select_common(INTERNAL_FUNCTION_PARAMETERS, const char *fnam
 					ncands++;
 				} ZEND_HASH_FOREACH_END();
 			}
-			w = phasync_select_wait(phasync_scope_top()->poller, epfd, cands, ncands, remaining,
-				phasync_scope_top()->timeout_ce, &closed);
+			w = phasync_select_wait(phasync_scope_top()->poller, epfd, cands, ncands, remaining, &closed);
 			close(epfd);
 			if (w == PHASYNC_WAIT_CLOSED) {
 				/* The closed descriptor is reported ready in whichever sets it was
@@ -2062,7 +2059,7 @@ static void phasync_curl_select(zval *zmh, double timeout, zval *return_value)
 			break;                           /* activity, an error (-1), or time up */
 		}
 		zval_ptr_dtor(&ret);
-		if (phasync_call_sleep(phasync_sleep_handler(), MIN(usec, (zend_long) (left * 1e6) + 1)) < 0) {
+		if (phasync_call_sleep(MIN(usec, (zend_long) (left * 1e6) + 1)) < 0) {
 			ZVAL_UNDEF(&ret);
 			break;                           /* exception pending */
 		}
@@ -2130,7 +2127,7 @@ static ZEND_NAMED_FUNCTION(phasync_sem_acquire_override)
 		if (!phasync_call_again("sem_acquire", &ret, 2, args) || Z_TYPE(ret) != IS_FALSE || errno != EAGAIN) {
 			break;
 		}
-		if (phasync_call_sleep(phasync_sleep_handler(), usec) < 0) {
+		if (phasync_call_sleep(usec) < 0) {
 			return;                          /* exception pending */
 		}
 		usec = MIN(usec * 2, 20000);
@@ -2175,7 +2172,7 @@ static ZEND_NAMED_FUNCTION(phasync_msg_receive_override)
 		if (Z_TYPE_P(code) != IS_LONG || Z_LVAL_P(code) != ENOMSG) {
 			break;
 		}
-		if (phasync_call_sleep(phasync_sleep_handler(), usec) < 0) {
+		if (phasync_call_sleep(usec) < 0) {
 			ZVAL_UNDEF(&ret);
 			break;                           /* exception pending */
 		}
@@ -2279,7 +2276,7 @@ static ZEND_NAMED_FUNCTION(phasync_curl_exec_override)
 		bytes = phasync_curl_bytes(ZEND_CALL_ARG(execute_data, 1));
 		stuck = ready && bytes == last_bytes ? stuck + 1 : 0;
 		if (stuck >= 4) {
-			if (phasync_call_sleep(phasync_sleep_handler(), usec) < 0) {
+			if (phasync_call_sleep(usec) < 0) {
 				goto cancelled;
 			}
 			usec = MIN(usec * 2, 20000);
@@ -2371,7 +2368,7 @@ static size_t phasync_ub_write(const char *str, size_t len)
 		return phasync_ub_write_orig(str, len);
 	}
 	while (PHASYNC_G(ub_writing)) {
-		if (phasync_call_sleep(phasync_sleep_handler(), 1000) < 0) {
+		if (phasync_call_sleep(1000) < 0) {
 			return 0;                    /* exception pending */
 		}
 	}

@@ -1,6 +1,6 @@
 /* Included by phasync.c (single translation unit); not compiled on its own. */
 
-/* Preemption (set_preempt_function()/checkpoint(), the timer thread, the compile-time checkpoint injection), and the fiber observer settling ledgers. */
+/* Preemption (Suspension::setPreemptInterval(), checkpoint(), the timer thread, the compile-time checkpoint injection), and the fiber observer settling ledgers. */
 
 /* ---- fiber observers ---- */
 
@@ -30,7 +30,7 @@ static void phasync_ledger_settle(phasync_ledger *l)
 				phasync_hold_drop(f);
 			}
 		}
-		OBJ_RELEASE(&l->closing_p->std);
+		phasync_poller_release(l->closing_p);
 		l->closing = NULL;
 	}
 }
@@ -50,7 +50,7 @@ static void phasync_ledger_fiber_destroy(zend_fiber_context *ctx)
 	phasync_ledger_close(ctx);
 }
 
-/* set_preempt_function(): every backward jump (a loop's back-edge, a backward
+/* Suspension::setPreemptInterval(): every backward jump (a loop's back-edge, a backward
  * goto, foreach's continue) is compiled with
  *     if (\phasync\ext\__PREEMPT_DUE) \phasync\ext\checkpoint();
  * right before it (phasync_inject_checkpoints()). The constant is registered
@@ -61,8 +61,8 @@ static void phasync_ledger_fiber_destroy(zend_fiber_context *ctx)
  * its type_info (an aligned 32-bit store, single-copy atomic on x86-64 and
  * aarch64; no data is published through it, so relaxed ordering is enough: the
  * checkpoint re-checks `pending` and takes the mutex). The next checkpoint that
- * runs calls the closure if the stack allows it. The interval counts from the
- * moment the closure is due there: the thread raises one request at a time.
+ * runs suspends the managed fiber with a ready Suspension if the stack allows it.
+ * The interval counts from the moment it is due there: the thread raises one request at a time.
  *
  * A checkpoint the stack rules reject lowers the flag (so the checkpoints that
  * follow cost a load again) and the thread raises it again after
@@ -256,8 +256,8 @@ static bool phasync_op_array_no_preempt(const zend_op_array *op_array)
 
 /* Preemption happens only at checkpoints (between loop iterations), where
  * phasync_never_suspend() allows it: the same never-list as for a wait, plus no
- * destructor, no function with #[phasync\Uninterruptible], and outside fibers none
- * at the bottom of the stack (an exception handler, a shutdown function). */
+ * destructor, no function with #[phasync\Uninterruptible], and none at the bottom
+ * of the stack (an exception handler, a shutdown function). */
 static bool phasync_preemptible(const zend_execute_data *execute_data)
 {
 	return !phasync_never_suspend(execute_data, true);
@@ -265,8 +265,8 @@ static bool phasync_preemptible(const zend_execute_data *execute_data)
 
 /* A raised checkpoint: ex is the PHP frame it is in. With own_frame, the
  * checkpoint was called with a frame of its own (EG(current_execute_data)),
- * which is left out of the stack while the closure runs; without, the frame's
- * opline is the frameless call, moved past it while the closure runs so no
+ * which is left out of the stack while the fiber is suspended; without, the
+ * frame's opline is the frameless call, moved past it meanwhile so no
  * backtrace shows it. */
 static zend_never_inline void phasync_checkpoint_hit(zend_execute_data *ex, bool own_frame)
 {

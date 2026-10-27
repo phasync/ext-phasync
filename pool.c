@@ -158,7 +158,7 @@ static bool phasync_task_finish(phasync_task *h, phasync_poller *p, phasync_task
 		pthread_detach(th);
 	}
 	phasync_chan_purge(p->chan, slot);
-	OBJ_RELEASE(&p->std);
+	phasync_poller_release(p);
 	if (!done) {
 		if (out) {
 			out->result = -1;
@@ -365,12 +365,12 @@ static void phasync_pool_run(phasync_task *t)
 		return;
 	}
 	phasync_task_chan(h, p);
-	GC_ADDREF(&p->std);                  /* the loop may drop the Poller while we wait */
+	p->refs++;                           /* a fork()ed child may replace it while we wait */
 	l = phasync_ledger_cur();
 	l->task = h;
 	l->task_p = p;
 	phasync_pool_submit(h);
-	phasync_park(p, h->slot, INFINITY, NULL);
+	phasync_park(p, h->slot, INFINITY);
 	l->task = NULL;
 	phasync_task_finish(h, p, t);
 }
@@ -403,11 +403,11 @@ static void phasync_pool_run_dedicated(phasync_task *t)
 		phasync_task_exec(t);
 		return;
 	}
-	GC_ADDREF(&p->std);
+	p->refs++;
 	l = phasync_ledger_cur();
 	l->task = h;
 	l->task_p = p;
-	phasync_park(p, h->slot, INFINITY, NULL);
+	phasync_park(p, h->slot, INFINITY);
 	l->task = NULL;
 	/* The worker left t->fd as a valid fd, or -1 with t->err set (a real open()
 	 * failure, or ECANCELED); the caller distinguishes the two. */

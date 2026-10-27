@@ -1,26 +1,20 @@
 /* phasync extension
  *
- * phasync\ext\Poller — waiting for streams for an event loop, on epoll: a
- *         coroutine parks in a slot of the loop (getSlot/park/unpark), and the
- *         Poller's poll() — the loop's one blocking call — unparks it.
- *
- * phasync\ext\manage($task, $poller, $sleep, $timeoutException) — run $task
- *         with transparent async I/O active for its dynamic extent.
- *         The tcp/unix/ssl transports are re-registered, and the process, sleep,
- *         DNS, file and filesystem functions, stream_select()/socket_select() and
+ * phasync\ext\Suspension (suspension.c) — how a blocking call in a fiber reaches
+ *         an event loop. A loop opts its fibers in with Suspension::manage(). The
+ *         tcp/unix/ssl transports are re-registered, and the process, sleep, DNS,
+ *         file and filesystem functions, stream_select()/socket_select() and
  *         friends overridden at request start; every descriptor-backed stream is
  *         wrapped as it is created (plus STDIN/STDOUT/STDERR and any fds inherited
- *         before load). The wrappers are inert outside a scope: a wrapped stream
- *         then behaves exactly like an unwrapped one. Inside a scope, in a fiber,
- *         a would-block parks the coroutine through the scope's Poller, whose
- *         poll() unparks it when it may continue: descriptors through one-shot
- *         epoll registrations, thread-pool tasks through a queue and an eventfd. The
- *         native timeout of the call goes to park(); park() throwing
- *         $timeoutException after it ran out finishes the op the way native PHP
- *         does on a timeout, any other exception propagates. The C side never
- *         touches the fiber API — the loop owns all suspension; it works because
- *         PHP fibers are stackful. Regular files, DNS and the FIFO open()
- *         rendezvous run on worker threads (not readiness-pollable).
+ *         before load). The wrappers are inert outside a managed fiber: a wrapped
+ *         stream then behaves exactly like an unwrapped one. In one, a would-block
+ *         suspends the fiber and throws a Suspension out of the resume() that ran
+ *         it; Suspension::poll() — the loop's one blocking call — finds it ready
+ *         when it may continue: descriptors through one-shot epoll registrations,
+ *         thread-pool tasks through a queue and an eventfd, timeouts by deadline.
+ *         Resumed, the op finishes the way native PHP does, its native timeout
+ *         included. Regular files, DNS and the FIFO open() rendezvous run on
+ *         worker threads (not readiness-pollable).
  */
 
 #ifdef __APPLE__
@@ -199,12 +193,6 @@ static PHP_MINIT_FUNCTION(phasync)
 		}
 		phasync_scope_bundled = true;
 	}
-	phasync_poller_ce = register_class_phasync_ext_internal_Poller();
-	phasync_poller_ce->create_object = phasync_poller_create;
-	memcpy(&phasync_poller_handlers, &std_object_handlers, sizeof(zend_object_handlers));
-	phasync_poller_handlers.offset = offsetof(phasync_poller, std);
-	phasync_poller_handlers.free_obj = phasync_poller_free;
-	phasync_poller_handlers.clone_obj = NULL;
 	phasync_suspension_minit();
 	pthread_atfork(phasync_preempt_fork_prepare, phasync_preempt_fork_parent, phasync_fork_child);
 	zend_hash_init(&phasync_suspend_roots, 8, NULL, NULL, 1);
@@ -349,10 +337,10 @@ static PHP_MSHUTDOWN_FUNCTION(phasync)
 
 /* Wrap descriptor-backed streams that already exist: STDIN/STDOUT/STDERR, and
  * anything opened before the extension loaded (e.g. via ensure_loaded()'s re-exec)
- * or before the first manage() scope. Sockets, FIFOs and char devices are wrapped
- * RAW. With include_files (on entering a scope, not at RINIT), plain regular files
- * are wrapped POOL too, so a file opened before manage() is async inside it — the
- * same wrapping fopen() applies inside a scope, and the POOL ops stay native
+ * or before the first Suspension::manage(). Sockets, FIFOs and char devices are wrapped
+ * RAW. With include_files (at the first Suspension::manage(), not at RINIT), plain
+ * regular files are wrapped POOL too, so a file opened before it is async in a
+ * managed fiber — the same wrapping fopen() applies, and the POOL ops stay native
  * outside one. This only happens for code that uses manage(): wrapping changes the
  * stream's ops identity, which php_stream_cast(AS_STDIO) checks. Streams with no OS
  * fd (php://memory/temp, data://, userspace wrappers) or with filters are left
@@ -393,14 +381,14 @@ static void phasync_wrap_existing_streams(bool include_files)
 	} ZEND_HASH_FOREACH_END();
 }
 
-/* ---- manage(): scoped handler activation --------------------------------- */
+/* ---- request startup and shutdown ----------------------------------------- */
 
 /* memcached.sess_persistent shares one libmemcached handle across every
  * coroutine without the per-handle lock (that lock lives on the Memcached
  * object's methods, which the session handler bypasses), and its session
  * lock wait is a libc usleep() that blocks the whole process -- neither is
- * fixable from here (see README, Memcached). Checked at every outermost
- * manage() because both ini settings are PHP_INI_ALL. */
+ * fixable from here (see README, Memcached). Checked at the first
+ * Suspension::manage() of a request. */
 static bool phasync_memcached_sessions_unsafe(void)
 {
 	const char *save_handler = zend_ini_string("session.save_handler", sizeof("session.save_handler") - 1, false);
@@ -423,7 +411,7 @@ static PHP_RINIT_FUNCTION(phasync)
 	zend_hash_clean(&PHASYNC_G(inflight));
 	PHASYNC_G(holds) = 0;
 	/* Always-on: the transport factories and function overrides go in at the
-	 * start of every request (they are inert while no manage() scope is active),
+	 * start of every request (they are inert outside a managed fiber),
 	 * and streams that predate them get wrapped now. */
 	phasync_install_hooks();
 	phasync_req_rinit();
@@ -433,7 +421,7 @@ static PHP_RINIT_FUNCTION(phasync)
 		phasync_ps_files_wrap();
 	}
 #endif
-	/* Per request, so opcache never substitutes it (see set_preempt_function()). */
+	/* Per request, so opcache never substitutes it (see coroutine.c, preemption). */
 	zend_register_bool_constant(ZEND_STRL("phasync\\ext\\__PREEMPT_DUE"), false, 0, module_number);
 	PHASYNC_G(preempt_due) = &((zend_constant *) zend_hash_find_ptr(EG(zend_constants), phasync_preempt_due_name))->value;
 	return SUCCESS;
@@ -464,6 +452,17 @@ static PHP_RSHUTDOWN_FUNCTION(phasync)
 	return SUCCESS;
 }
 
+/* Every object is gone now. A poller still here was held by a fiber PHP freed
+ * without unwinding it (after a fatal error): close it before the request's
+ * memory goes. */
+static ZEND_MODULE_POST_ZEND_DEACTIVATE_D(phasync)
+{
+	while (phasync_pollers) {
+		phasync_poller_free(phasync_pollers);
+	}
+	return SUCCESS;
+}
+
 static const zend_module_dep phasync_deps[] = {
 	ZEND_MOD_OPTIONAL("scope")
 	ZEND_MOD_END
@@ -482,7 +481,7 @@ zend_module_entry phasync_module_entry = {
 	PHP_MODULE_GLOBALS(phasync),
 	PHP_GINIT(phasync),
 	PHP_GSHUTDOWN(phasync),
-	NULL,
+	ZEND_MODULE_POST_ZEND_DEACTIVATE_N(phasync),
 	STANDARD_MODULE_PROPERTIES_EX
 };
 

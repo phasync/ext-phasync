@@ -655,7 +655,7 @@ static ZEND_NAMED_FUNCTION(phasync_sleep_override)
 	 * idle-waits by calling these same sleep functions from the main (non-fiber)
 	 * context; delegating those to the handler (which can only Fiber::suspend
 	 * inside a fiber) would collapse the wait to a no-op and spin the loop. */
-	if (phasync_sleep_handler() == NULL || EG(active_fiber) == NULL || phasync_from_c()) {
+	if (phasync_scope_top() == NULL || EG(active_fiber) == NULL || phasync_from_c()) {
 		PHASYNC_G(orig_sleep)(INTERNAL_FUNCTION_PARAM_PASSTHRU);
 		return;
 	}
@@ -667,7 +667,7 @@ static ZEND_NAMED_FUNCTION(phasync_sleep_override)
 		zend_argument_value_error(1, "must be greater than or equal to 0");
 		RETURN_THROWS();
 	}
-	phasync_call_sleep(phasync_sleep_handler(), phasync_sec_to_usec((double) seconds));
+	phasync_call_sleep(phasync_sec_to_usec((double) seconds));
 	RETURN_LONG(0);
 }
 
@@ -689,7 +689,7 @@ static ZEND_NAMED_FUNCTION(phasync_usleep_override)
 {
 	zend_long usec;
 
-	if (phasync_sleep_handler() == NULL || EG(active_fiber) == NULL || phasync_from_c()) {
+	if (phasync_scope_top() == NULL || EG(active_fiber) == NULL || phasync_from_c()) {
 		PHASYNC_G(orig_usleep)(INTERNAL_FUNCTION_PARAM_PASSTHRU);
 		return;
 	}
@@ -701,14 +701,14 @@ static ZEND_NAMED_FUNCTION(phasync_usleep_override)
 		zend_argument_value_error(1, "must be greater than or equal to 0");
 		RETURN_THROWS();
 	}
-	phasync_call_sleep(phasync_sleep_handler(), usec);
+	phasync_call_sleep(usec);
 }
 
 static ZEND_NAMED_FUNCTION(phasync_time_nanosleep_override)
 {
 	zend_long sec, nsec;
 
-	if (phasync_sleep_handler() == NULL || EG(active_fiber) == NULL || phasync_from_c()) {
+	if (phasync_scope_top() == NULL || EG(active_fiber) == NULL || phasync_from_c()) {
 		PHASYNC_G(orig_time_nanosleep)(INTERNAL_FUNCTION_PARAM_PASSTHRU);
 		return;
 	}
@@ -729,8 +729,7 @@ static ZEND_NAMED_FUNCTION(phasync_time_nanosleep_override)
 		zend_value_error("Nanoseconds was not in the range 0 to 999 999 999 or seconds was negative");
 		RETURN_THROWS();
 	}
-	phasync_call_sleep(phasync_sleep_handler(),
-		phasync_sec_to_usec((double) sec + (double) nsec / 1000000000.0));
+	phasync_call_sleep(phasync_sec_to_usec((double) sec + (double) nsec / 1000000000.0));
 	RETURN_TRUE;
 }
 
@@ -740,7 +739,7 @@ static ZEND_NAMED_FUNCTION(phasync_time_sleep_until_override)
 	struct timeval tv;
 	zend_long usec;
 
-	if (phasync_sleep_handler() == NULL || EG(active_fiber) == NULL || phasync_from_c()) {
+	if (phasync_scope_top() == NULL || EG(active_fiber) == NULL || phasync_from_c()) {
 		PHASYNC_G(orig_time_sleep_until)(INTERNAL_FUNCTION_PARAM_PASSTHRU);
 		return;
 	}
@@ -751,7 +750,7 @@ static ZEND_NAMED_FUNCTION(phasync_time_sleep_until_override)
 	gettimeofday(&tv, NULL);
 	now = (double) tv.tv_sec + (double) tv.tv_usec / 1000000.0;
 	usec = (ts > now) ? phasync_sec_to_usec(ts - now) : 0;
-	phasync_call_sleep(phasync_sleep_handler(), usec);
+	phasync_call_sleep(usec);
 	RETURN_TRUE;
 }
 
@@ -1495,7 +1494,7 @@ static int phasync_stdio_set_option(php_stream *stream, int option, int value, v
 	 * end up here. */
 	if (option == PHP_STREAM_OPTION_LOCKING && ptrparam == NULL
 	 && (value == LOCK_SH || value == LOCK_EX)
-	 && phasync_sleep_handler() != NULL && EG(active_fiber) != NULL) {
+	 && phasync_scope_top() != NULL && EG(active_fiber) != NULL) {
 		zend_long usec = 1000;
 		int rc;
 		while ((rc = phasync_stdio_set_option_orig(stream, option, value | LOCK_NB, NULL)) != 0
@@ -1503,7 +1502,7 @@ static int phasync_stdio_set_option(php_stream *stream, int option, int value, v
 			if (!phasync_inflight_enter(stream)) {
 				return -1;
 			}
-			rc = phasync_call_sleep(phasync_sleep_handler(), usec);
+			rc = phasync_call_sleep(usec);
 			if (phasync_inflight_leave(stream) || rc < 0) {
 				return -1;               /* closed meanwhile, or exception pending */
 			}
@@ -1759,7 +1758,7 @@ static void phasync_waitpid_common(INTERNAL_FUNCTION_PARAMETERS, zend_long pid, 
 			if (waitid(type, id, &si, WEXITED | WNOHANG | WNOWAIT) != 0 || si.si_pid != 0) {
 				break;                       /* one exited, or none to wait for (ECHILD) */
 			}
-			if (phasync_call_sleep(phasync_sleep_handler(), usec) < 0) {
+			if (phasync_call_sleep(usec) < 0) {
 				return;                      /* exception pending */
 			}
 			usec = MIN(usec * 2, 20000);
@@ -2221,10 +2220,10 @@ static zend_internal_function *phasync_find_ifunc(const char *name, size_t len)
 }
 
 /* Install the transport re-registration + internal-function overrides. Called
- * lazily on the first manage() of a request and left in place: the hooks are
- * inert while no scope is active (the wrapped ops and sleep/pool overrides fall
- * through to the original when scope_top is NULL), so there is nothing to toggle
- * off. Idempotent. */
+ * at request start and again by the first Suspension::manage(), and left in place:
+ * the hooks are inert outside a managed fiber (the wrapped ops and sleep/pool
+ * overrides fall through to the original when phasync_scope_top() is NULL), so
+ * there is nothing to toggle off. Idempotent. */
 static void phasync_install_hooks(void)
 {
 	HashTable *xhash;
@@ -2595,11 +2594,10 @@ static bool phasync_ps_files_path(const zend_string *key, char *buf, size_t bufl
 
 static zend_result phasync_ps_files_read(PS_READ_ARGS)
 {
-	zval *sleep = phasync_sleep_handler();
 	char path[MAXPATHLEN];
 	zend_long backoff = 1000;
 
-	if (sleep && EG(active_fiber) && key && phasync_ps_files_path(key, path, sizeof(path))) {
+	if (phasync_scope_top() && EG(active_fiber) && key && phasync_ps_files_path(key, path, sizeof(path))) {
 		for (;;) {
 			int fd = open(path, O_RDONLY | O_CLOEXEC), rc;
 			if (fd < 0) {
@@ -2610,7 +2608,7 @@ static zend_result phasync_ps_files_read(PS_READ_ARGS)
 			if (rc == 0 || errno != EWOULDBLOCK) {
 				break;
 			}
-			if (phasync_call_sleep(sleep, backoff) < 0) {
+			if (phasync_call_sleep(backoff) < 0) {
 				return FAILURE;           /* cancelled: the exception propagates */
 			}
 			backoff = MIN(backoff * 2, 50000);

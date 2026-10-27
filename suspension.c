@@ -121,15 +121,6 @@ static void phasync_suspension_dtor(zend_object *obj)
 	}
 }
 
-/* Release the fibers of Suspensions the loop dropped. */
-static void phasync_orphans_release(void)
-{
-	while (PHASYNC_G(norphans)) {
-		zend_fiber *f = PHASYNC_G(orphans)[--PHASYNC_G(norphans)];
-		OBJ_RELEASE(&f->std);
-	}
-}
-
 static void phasync_suspension_free(zend_object *obj)
 {
 	phasync_susp *s = phasync_susp_from(obj);
@@ -315,13 +306,12 @@ static int phasync_susp_wait(zend_fiber *m, phasync_susp *s)
 /* Park the current coroutine in slot until it is ready, or for at most timeout seconds
  * (INFINITY: no limit): TIMEOUT then, which a hooked call finishes the way PHP does on a
  * native timeout. ERROR with the exception pending on a cancellation. */
-static int phasync_park(phasync_poller *p, zend_long slot, double timeout, zend_class_entry *timeout_ce)
+static int phasync_park(phasync_poller *p, zend_long slot, double timeout)
 {
 	phasync_susp *s = PHASYNC_G(susp)[slot];
 	zend_fiber *m;
 	int rc;
 
-	(void) timeout_ce;
 	if (phasync_cannot_suspend()) {
 		rc = PHASYNC_WAIT_ERROR;
 	} else if ((m = phasync_managed_top()) == NULL) {
@@ -347,7 +337,7 @@ static int phasync_susp_sleep(double seconds)
 	if (p == NULL || (slot = phasync_get_slot(p)) < 0) {
 		return -1;
 	}
-	return phasync_park(p, slot, seconds > 0 ? seconds : 0, NULL) == PHASYNC_WAIT_ERROR ? -1 : 0;
+	return phasync_park(p, slot, seconds > 0 ? seconds : 0) == PHASYNC_WAIT_ERROR ? -1 : 0;
 }
 
 /* ---- the process's poller --------------------------------------------------------- */
@@ -364,11 +354,11 @@ static phasync_poller *phasync_proc_poller(void)
 	}
 	if (p) {
 		PHASYNC_G(proc_poller) = NULL;
-		OBJ_RELEASE(&p->std);
+		phasync_poller_release(p);
 	}
-	p = phasync_poller_from(phasync_poller_create(phasync_poller_ce));
+	p = phasync_poller_create();
 	if (!phasync_poller_init(p)) {
-		OBJ_RELEASE(&p->std);
+		phasync_poller_release(p);
 		return NULL;
 	}
 	PHASYNC_G(proc_poller) = p;
@@ -459,7 +449,6 @@ ZEND_METHOD(phasync_ext_Suspension, poll)
 	} ZEND_HASH_FOREACH_END();
 
 	array_init(return_value);
-	phasync_orphans_release();
 	phasync_holds_release();   /* closers kept alive while others were inside an op on their stream */
 	if (EG(exception)) {
 		return;
@@ -662,7 +651,7 @@ static void phasync_susp_wait_method(INTERNAL_FUNCTION_PARAMETERS, int dir)
 		zend_throw_error(NULL, "Unable to create the epoll set: %s", strerror(errno));
 		RETURN_THROWS();
 	}
-	rc = phasync_poller_wait(p, dir, stream, fd, timeout, NULL, true);
+	rc = phasync_poller_wait(p, dir, stream, fd, timeout, true);
 	if (rc == PHASYNC_WAIT_ERROR) {
 		RETURN_THROWS();
 	}
@@ -724,12 +713,9 @@ static void phasync_suspension_rinit(void)
 	PHASYNC_G(susp) = NULL;
 	PHASYNC_G(susp_spare) = NULL;
 	PHASYNC_G(nsusp) = PHASYNC_G(capsusp) = PHASYNC_G(nspare) = 0;
-	PHASYNC_G(orphans) = NULL;
-	PHASYNC_G(norphans) = PHASYNC_G(caporphans) = 0;
 	PHASYNC_G(proc_poller) = NULL;
 	PHASYNC_G(managing) = false;
 	memset(&PHASYNC_G(proc_scope), 0, sizeof(PHASYNC_G(proc_scope)));
-	ZVAL_UNDEF(&PHASYNC_G(proc_scope).sleep);
 }
 
 static void phasync_suspension_rshutdown(void)
@@ -741,7 +727,6 @@ static void phasync_suspension_rshutdown(void)
 	for (uint32_t i = 0; i < n; i++) {
 		PHASYNC_G(susp)[i]->state = PHASYNC_S_RETIRED;
 	}
-	phasync_orphans_release();
 	for (uint32_t i = 0; i < n; i++) {
 		phasync_susp *s = PHASYNC_G(susp)[i];
 		if (s->fiber) {
@@ -750,7 +735,6 @@ static void phasync_suspension_rshutdown(void)
 			OBJ_RELEASE(&f->std);
 		}
 	}
-	phasync_orphans_release();
 	for (uint32_t i = 0; i < n; i++) {
 		phasync_susp *s = PHASYNC_G(susp)[i];
 		if (s->owned) {
@@ -762,18 +746,13 @@ static void phasync_suspension_rshutdown(void)
 		efree(PHASYNC_G(susp));
 		efree(PHASYNC_G(susp_spare));
 	}
-	if (PHASYNC_G(orphans)) {
-		efree(PHASYNC_G(orphans));
-	}
-	PHASYNC_G(orphans) = NULL;
-	PHASYNC_G(norphans) = PHASYNC_G(caporphans) = 0;
 	PHASYNC_G(susp) = NULL;
 	PHASYNC_G(susp_spare) = NULL;
 	PHASYNC_G(nsusp) = PHASYNC_G(capsusp) = PHASYNC_G(nspare) = 0;
 	if (PHASYNC_G(proc_poller)) {
 		phasync_poller *p = PHASYNC_G(proc_poller);
 		PHASYNC_G(proc_poller) = NULL;
-		OBJ_RELEASE(&p->std);
+		phasync_poller_release(p);
 	}
 	PHASYNC_G(managing) = false;
 }

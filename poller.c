@@ -32,9 +32,7 @@
  * finds a live channel. */
 
 
-static zend_class_entry *phasync_poller_ce;
-static zend_object_handlers phasync_poller_handlers;
-static phasync_poller *phasync_pollers;   /* live Pollers of this process */
+static phasync_poller *phasync_pollers;   /* live pollers of this process */
 
 
 
@@ -50,11 +48,6 @@ static void phasync_fork_child(void)
 {
 	phasync_fork_gen++;
 	phasync_preempt_fork_child();
-}
-
-static zend_always_inline phasync_poller *phasync_poller_from(zend_object *obj)
-{
-	return (phasync_poller *) ((char *) obj - offsetof(phasync_poller, std));
 }
 
 static void phasync_reg_dtor(zval *zv)
@@ -499,7 +492,7 @@ static void phasync_wait_settle(phasync_poller *p, int idx, php_stream *stream, 
 	if (dupfd >= 0) {
 		close(dupfd);
 	}
-	OBJ_RELEASE(&p->std);
+	phasync_poller_release(p);
 }
 
 /* ---- PHP invoked from C: may it suspend? -------------------------------
@@ -773,7 +766,7 @@ static int phasync_wait_inline(php_socket_t fd, int dir, double timeout)
  * waits for the loop's next poll(), as phasync's own wait on it does without
  * the extension (#29); hooked operations go on at once. */
 static int phasync_poller_wait(phasync_poller *p, int dir, php_stream *stream, php_socket_t fd,
-                               double timeout, zend_class_entry *timeout_ce, bool via_loop)
+                               double timeout, bool via_loop)
 {
 	int idx = dir == PHASYNC_WRITE, rc, dupfd = -1;
 	phasync_reg *r;
@@ -856,7 +849,7 @@ static int phasync_poller_wait(phasync_poller *p, int dir, php_stream *stream, p
 	}
 
 park:
-	GC_ADDREF(&p->std);                  /* the loop may drop the Poller while we wait */
+	p->refs++;                           /* a fork()ed child may replace it while we wait */
 	l = phasync_ledger_cur();
 	l->wait_p = p;
 	l->wait_stream = stream;
@@ -864,7 +857,7 @@ park:
 	l->wait_idx = idx;
 	l->wait_dupfd = dupfd;
 	l->wait_slot = slot;
-	rc = phasync_park(p, slot, timeout, timeout_ce);
+	rc = phasync_park(p, slot, timeout);
 	l->wait_p = NULL;
 	phasync_wait_settle(p, idx, stream, fd, slot, dupfd);
 	return rc;
@@ -878,32 +871,27 @@ done:
 	return rc;
 }
 
-/* ---- phasync\ext\Poller -------------------------------------------------- */
+/* ---- the poller's lifecycle ------------------------------------------------- */
 
-static zend_object *phasync_poller_create(zend_class_entry *ce)
+static phasync_poller *phasync_poller_create(void)
 {
-	phasync_poller *p = zend_object_alloc(sizeof(phasync_poller), ce);
+	phasync_poller *p = ecalloc(1, sizeof(phasync_poller));
 
-	zend_object_std_init(&p->std, ce);
-	object_properties_init(&p->std, ce);
-	p->std.handlers = &phasync_poller_handlers;
+	p->refs = 1;
 	p->epfd = -1;
 	p->fork_gen = phasync_fork_gen;
 	p->select_mode = true;   /* 0 watched fds: starts below the threshold */
 	zend_hash_init(&p->regs, 16, NULL, phasync_reg_dtor, 1);
 	p->next = phasync_pollers;
 	phasync_pollers = p;
-	return &p->std;
+	return p;
 }
 
-/* Waiters still parked through a freed Poller are never unparked: their waits
- * run to their timeouts (a waiter keeps the Poller alive while it waits, so this
- * happens only to the loop's own parked coroutines). In a fork()ed child only
- * the child's copies of the descriptors are closed. */
-static void phasync_poller_free(zend_object *obj)
+/* Each waiter holds a reference while it waits, so a poller replaced after
+ * fork() lives until its last waiter has left. In a fork()ed child only the
+ * child's copies of the descriptors are closed. */
+static void phasync_poller_free(phasync_poller *p)
 {
-	phasync_poller *p = phasync_poller_from(obj);
-
 	for (phasync_poller **pp = &phasync_pollers; *pp; pp = &(*pp)->next) {
 		if (*pp == p) {
 			*pp = p->next;
@@ -921,7 +909,14 @@ static void phasync_poller_free(zend_object *obj)
 			phasync_chan_close(p->chan); /* its mutex may be the parent's, held at fork */
 		}
 	}
-	zend_object_std_dtor(obj);
+	efree(p);
+}
+
+static void phasync_poller_release(phasync_poller *p)
+{
+	if (--p->refs == 0) {
+		phasync_poller_free(p);
+	}
 }
 
 /* Create its epoll set and completion channel. False (errno set) on failure. */

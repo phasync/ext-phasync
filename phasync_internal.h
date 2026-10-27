@@ -96,8 +96,6 @@ struct phasync_susp;
 
 typedef struct phasync_scope {
 	struct phasync_poller *poller;
-	zval sleep;                     /* unused (UNDEF): sleeps park with a deadline   */
-	zend_class_entry *timeout_ce;   /* unused (NULL): a timeout is the Suspension's  */
 } phasync_scope;
 
 
@@ -109,8 +107,6 @@ ZEND_BEGIN_MODULE_GLOBALS(phasync)
 	struct phasync_susp **susp;   /* the Suspension pool; an index is a wait's slot */
 	uint32_t *susp_spare;         /* indexes of retired ones, reused once only the pool holds them */
 	uint32_t nsusp, capsusp, nspare;
-	zend_fiber **orphans;         /* fibers of Suspensions the loop dropped, released at the next poll() */
-	uint32_t norphans, caporphans;
 	struct phasync_poller *proc_poller; /* the request's poller, created on first use */
 	phasync_scope proc_scope;
 	bool managing;                /* Suspension::manage() was called this request */
@@ -213,11 +209,6 @@ static zend_always_inline int phasync_writing(void)
 {
 	return phasync_scope_top() ? PHASYNC_WRITE : 0;
 }
-static zend_always_inline zval *phasync_sleep_handler(void)
-{
-	phasync_scope *s = phasync_scope_top();
-	return s ? &s->sleep : NULL;
-}
 
 /* ---- types shared across more than one of this extension's own source
  * files (moved here verbatim from their original spot in the pre-split
@@ -264,7 +255,7 @@ typedef struct phasync_poller {
 	                                       * below), never through libc's FORTIFY-checked FD_SET */
 	size_t        sel_cap;        /* bytes allocated for each of sel_rfds/sel_wfds */
 	struct phasync_poller *next;   /* the live Pollers (for the close hooks)     */
-	zend_object   std;
+	uint32_t      refs;     /* the request + each waiter (a fork()ed child's old one: its waiters) */
 } phasync_poller;
 
 typedef struct {
@@ -347,7 +338,8 @@ static bool phasync_unwinding(void);
 static bool phasync_op_array_no_preempt(const zend_op_array *op_array);
 static double phasync_now(void);
 static zend_long phasync_get_slot(struct phasync_poller *p);
-static int phasync_park(struct phasync_poller *p, zend_long slot, double timeout, zend_class_entry *timeout_ce);
+static int phasync_park(struct phasync_poller *p, zend_long slot, double timeout);
+static void phasync_poller_release(phasync_poller *p);
 static int phasync_susp_sleep(double seconds);
 static void phasync_holds_release(void);
 static ssize_t phasync_wrapped_read_pool(php_stream *stream, char *buf, size_t count);
