@@ -1,0 +1,31 @@
+name: ext-scope is current
+
+# scope/ is a git subtree of fiber-interop/ext-scope. This fails when ext-scope has a newer tag, so
+# an update is never missed: git subtree pull --prefix=scope https://github.com/fiber-interop/ext-scope.git <tag> --squash
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: scope/ is at ext-scope's latest tag
+        run: |
+          split=$(git log -1 --grep='^git-subtree-dir: scope$' --format=%B | sed -n 's/^git-subtree-split: //p')
+          read -r sha tag < <(git ls-remote --tags --sort=-v:refname https://github.com/fiber-interop/ext-scope.git 'v*' | grep '\^{}$' | head -1)
+          tag=${tag#refs/tags/}; tag=${tag%^{\}}
+          if [ "$split" != "$sha" ]; then
+            echo "::error::scope/ is at ${split:-?}, ext-scope's latest tag is $tag ($sha): git subtree pull --prefix=scope https://github.com/fiber-interop/ext-scope.git $tag --squash"
+            exit 1
+          fi
