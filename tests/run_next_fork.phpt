@@ -3,6 +3,8 @@ run_next(): a fork()ed child that ends does not run the next lifecycle; a child 
 --EXTENSIONS--
 phasync
 pcntl
+--SKIPIF--
+<?php if (!in_array(PHP_OS_FAMILY, ['Linux', 'BSD', 'Solaris'], true)) die('skip run_next() needs an ELF platform'); ?>
 --FILE--
 <?php
 require __DIR__ . '/run_next.inc';

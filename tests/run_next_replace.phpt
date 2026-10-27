@@ -2,6 +2,8 @@
 run_next(): calling it again replaces the recording; a relative path is resolved at the call; it is one-shot
 --EXTENSIONS--
 phasync
+--SKIPIF--
+<?php if (!in_array(PHP_OS_FAMILY, ['Linux', 'BSD', 'Solaris'], true)) die('skip run_next() needs an ELF platform'); ?>
 --FILE--
 <?php
 require __DIR__ . '/run_next.inc';

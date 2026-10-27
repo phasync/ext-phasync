@@ -2,6 +2,8 @@
 run_next(): everything lifecycle 1 wrote (ob buffer, STDOUT, socket, plain file) is out before lifecycle 2 gets going
 --EXTENSIONS--
 phasync
+--SKIPIF--
+<?php if (!in_array(PHP_OS_FAMILY, ['Linux', 'BSD', 'Solaris'], true)) die('skip run_next() needs an ELF platform'); ?>
 --FILE--
 <?php
 require __DIR__ . '/run_next.inc';

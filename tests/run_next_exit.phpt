@@ -2,6 +2,8 @@
 run_next(): exit() in a run still lets the next registered run happen, and the last run's exit status is the process's
 --EXTENSIONS--
 phasync
+--SKIPIF--
+<?php if (!in_array(PHP_OS_FAMILY, ['Linux', 'BSD', 'Solaris'], true)) die('skip run_next() needs an ELF platform'); ?>
 --FILE--
 <?php
 require __DIR__ . '/run_next.inc';

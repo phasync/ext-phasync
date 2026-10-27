@@ -3,7 +3,7 @@ run_next(): descriptors received over the inherited socket (SCM_RIGHTS) work in 
 --EXTENSIONS--
 phasync
 --SKIPIF--
-<?php if (!is_file(PHP_EXTENSION_DIR . '/sockets.so')) die('skip ext-sockets is not available');
+<?php if (!in_array(PHP_OS_FAMILY, ['Linux', 'BSD', 'Solaris'], true)) die('skip run_next() needs an ELF platform'); if (!is_file(PHP_EXTENSION_DIR . '/sockets.so')) die('skip ext-sockets is not available');
 --FILE--
 <?php
 require __DIR__ . '/run_next.inc';

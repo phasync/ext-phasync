@@ -2,6 +2,8 @@
 run_next(): the script runs again after the current one ends, for as long as each run registers the next
 --EXTENSIONS--
 phasync
+--SKIPIF--
+<?php if (!in_array(PHP_OS_FAMILY, ['Linux', 'BSD', 'Solaris'], true)) die('skip run_next() needs an ELF platform'); ?>
 --FILE--
 <?php
 require __DIR__ . '/run_next.inc';
