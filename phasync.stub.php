@@ -46,8 +46,8 @@ final class Suspension extends \Exception
      * with a Suspension that is ready when one of these is, so a loop can run inside
      * another loop's fiber.
      *
-     * @param array<Suspension> $suspensions
-     * @return array<Suspension>
+     * @param array<int|string, Suspension> $suspensions
+     * @return array<int|string, Suspension>
      */
     public static function poll(array $suspensions, float $seconds): array {}
 
@@ -80,6 +80,13 @@ final class Suspension extends \Exception
      * for it (not a signal: no syscall fails with EINTR). null stops it.
      */
     public static function setPreemptInterval(?float $seconds): void {}
+
+    /**
+     * The scope current at the blocking call: the one the fiber continues in when
+     * it is resumed (Fiber::getScope() is the scope it belongs to). Error without
+     * the Scope class, or once it was resumed.
+     */
+    public function getScope(): \Scope {}
 
     /** True once poll() has found it ready; resume() may be called then. */
     public function isReady(): bool {}
@@ -228,8 +235,7 @@ namespace phasync {
 
 /**
  * While a function with this attribute, or anything it calls in its fiber, runs,
- * the closure set with phasync\ext\set_preempt_function() is not called: it is
- * not preempted. It is not mutual exclusion: it can still suspend (on I/O, say),
+ * Suspension::setPreemptInterval() does not preempt it. It is not mutual exclusion: it can still suspend (on I/O, say),
  * and other coroutines run meanwhile.
  *
  * @strict-properties

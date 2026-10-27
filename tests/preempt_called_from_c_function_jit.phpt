@@ -15,7 +15,10 @@ session.use_cookies=0
 session.cache_limiter=
 session.save_path=
 --FILE--
-<?php require __DIR__ . '/preempt_called_from_c.inc';
+<?php
+require __DIR__ . '/preempt.inc';
+phasync\ext\preempt_main(__DIR__ . '/preempt_called_from_c_function_jit.body.inc');
+?>
 --EXPECT--
 session read handler: interrupted
 plain PHP code: interrupted

@@ -19,8 +19,8 @@ opcache.jit_hot_return=8
 opcache.jit_hot_side_exit=8
 --FILE--
 <?php
-var_dump(opcache_get_status()['jit']['on']);
-require __DIR__ . '/preempt_shapes.inc';
+require __DIR__ . '/preempt.inc';
+phasync\ext\preempt_main(__DIR__ . '/preempt_shapes_tracing.body.inc');
 ?>
 --EXPECT--
 bool(true)

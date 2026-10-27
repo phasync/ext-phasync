@@ -7,7 +7,10 @@ phasync
 --INI--
 opcache.enable_cli=0
 --FILE--
-<?php require __DIR__ . '/preempt_basic.inc'; ?>
+<?php
+require __DIR__ . '/preempt.inc';
+phasync\ext\preempt_main(__DIR__ . '/preempt_basic.body.inc');
+?>
 --EXPECT--
 -- none set
 NULL

@@ -14,8 +14,8 @@ opcache.jit=function
 opcache.jit_buffer_size=64M
 --FILE--
 <?php
-var_dump(opcache_get_status()['jit']['on']);
-require __DIR__ . '/preempt_loops.inc';
+require __DIR__ . '/preempt.inc';
+phasync\ext\preempt_main(__DIR__ . '/preempt_loops_function_jit.body.inc');
 ?>
 --EXPECT--
 bool(true)

@@ -8,7 +8,8 @@ phasync
 opcache.enable_cli=0
 --FILE--
 <?php
-require __DIR__ . '/preempt_shapes.inc';
+require __DIR__ . '/preempt.inc';
+phasync\ext\preempt_main(__DIR__ . '/preempt_shapes.body.inc');
 ?>
 --EXPECT--
 for: interrupted, mid-iteration: 0

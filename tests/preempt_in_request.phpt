@@ -6,22 +6,8 @@ phasync
 <?php require __DIR__ . '/timers.inc'; skip_if_coarse_timers(25); ?>
 --FILE--
 <?php
-require __DIR__ . '/sink.inc';
-$c = new ArrayObject(['n' => 0]);
-phasync\ext\set_preempt_function(function () use ($c) { $c['n']++; }, 0.005);
-$spin = function () use ($c) { $c['n'] = 0; $t = microtime(true); while (microtime(true) - $t < 0.1); return $c['n'] >= 3 ? 'interrupted' : 'calls: ' . $c['n']; };
-$f = new Fiber(function () use ($spin) {
-    $o = new ArrayObject;
-    phasync\ext\sapi(function () use ($o, $spin) {
-        $o[] = 'request: ' . $spin();
-        $cufa = 'call_user_func_array';
-        $o[] = 'dynamic call_user_func_array: ' . $cufa($spin, []);
-        $a = [2, 1];
-        usort($a, function ($x, $y) use ($o, $spin) { $o[] = 'usort comparator: ' . $spin(); return $x <=> $y; });
-    }, new Sink);
-    echo implode("\n", (array) $o), "\n";
-});
-$f->start();
+require __DIR__ . '/preempt.inc';
+phasync\ext\preempt_main(__DIR__ . '/preempt_in_request.body.inc');
 ?>
 --EXPECT--
 request: interrupted

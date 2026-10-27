@@ -36,6 +36,7 @@ typedef struct phasync_susp {
 	double       deadline;    /* phasync_now() clock; INFINITY: none */
 	zend_fiber  *fiber;       /* the managed fiber it suspended (a reference) */
 	zval         members;     /* a poll() of these, for an outer loop; UNDEF otherwise */
+	zval         scope;       /* Scope::getCurrent() at the blocking call; UNDEF without Scope */
 	zend_object  std;
 } phasync_susp;
 
@@ -94,14 +95,14 @@ static zend_object *phasync_suspension_create(zend_class_entry *ce)
 	object_properties_init(&s->std, ce);
 	s->std.handlers = &phasync_suspension_handlers;
 	ZVAL_UNDEF(&s->members);
+	ZVAL_UNDEF(&s->scope);
 	s->owned = true;
 	GC_ADD_FLAGS(&s->std, GC_NOT_COLLECTABLE);
 	return &s->std;
 }
 
-/* The loop let go of a Suspension it was given: the pool takes it back. Its fiber, if
- * still waiting, is released later (not from inside a destructor, where fibers can't
- * switch): destroyed then unless someone else holds it. */
+/* The loop let go of a Suspension it was given: the pool takes it back, and releases its
+ * fiber if it was still waiting. */
 static void phasync_suspension_dtor(zend_object *obj)
 {
 	phasync_susp *s = phasync_susp_from(obj);
@@ -113,12 +114,10 @@ static void phasync_suspension_dtor(zend_object *obj)
 	GC_DEL_FLAGS(obj, IS_OBJ_DESTRUCTOR_CALLED);   /* so it comes here again next time */
 	s->owned = true;
 	if (s->fiber) {
-		if (PHASYNC_G(norphans) == PHASYNC_G(caporphans)) {
-			PHASYNC_G(caporphans) = PHASYNC_G(caporphans) ? PHASYNC_G(caporphans) * 2 : 16;
-			PHASYNC_G(orphans) = erealloc(PHASYNC_G(orphans), PHASYNC_G(caporphans) * sizeof(zend_fiber *));
-		}
-		PHASYNC_G(orphans)[PHASYNC_G(norphans)++] = s->fiber;
+		/* As a dropped fiber is: destroyed now, unless someone else holds it. */
+		zend_fiber *f = s->fiber;
 		s->fiber = NULL;
+		OBJ_RELEASE(&f->std);
 	}
 }
 
@@ -136,6 +135,7 @@ static void phasync_suspension_free(zend_object *obj)
 	phasync_susp *s = phasync_susp_from(obj);
 
 	zval_ptr_dtor(&s->members);
+	zval_ptr_dtor(&s->scope);
 	if (s->fiber) {
 		OBJ_RELEASE(&s->fiber->std);
 	}
@@ -201,6 +201,8 @@ static void phasync_susp_retire(phasync_susp *s)
 	}
 	zval_ptr_dtor(&s->members);
 	ZVAL_UNDEF(&s->members);
+	zval_ptr_dtor(&s->scope);
+	ZVAL_UNDEF(&s->scope);
 	PHASYNC_G(susp_spare)[PHASYNC_G(nspare)++] = s->idx;
 }
 
@@ -267,10 +269,35 @@ static bool phasync_susp_switch(zend_fiber *m, phasync_susp *s, zval *value)
 /* Suspend until s is ready. READY; TIMEOUT once its deadline has passed; ERROR with the
  * exception pending if the loop threw into the fiber (a cancellation) or destroys it. A
  * resume() before it is ready suspends again with the same Suspension. */
+/* Scope::getCurrent(), when the Scope class exists (ext-scope, bundled or not, or a
+ * polyfill), into *out; UNDEF otherwise. */
+static void phasync_scope_current(zval *out)
+{
+	static zend_class_entry *ce;
+	static zend_function *fn;
+
+	ZVAL_UNDEF(out);
+	if (fn == NULL || ce == NULL) {
+		zend_string *name = zend_string_init("Scope", sizeof("Scope") - 1, 0);
+		ce = zend_lookup_class_ex(name, NULL, ZEND_FETCH_CLASS_NO_AUTOLOAD);
+		zend_string_release(name);
+		fn = ce ? zend_hash_str_find_ptr(&ce->function_table, "getcurrent", sizeof("getcurrent") - 1) : NULL;
+		if (fn == NULL || !(fn->common.fn_flags & ZEND_ACC_STATIC) || fn->type != ZEND_INTERNAL_FUNCTION) {
+			ce = NULL;   /* only the internal class is cached across requests */
+			fn = NULL;
+			return;
+		}
+	}
+	zend_call_known_function(fn, NULL, ce, out, 0, NULL, NULL);
+}
+
 static int phasync_susp_wait(zend_fiber *m, phasync_susp *s)
 {
 	zval v;
 
+	if (Z_ISUNDEF(s->scope)) {
+		phasync_scope_current(&s->scope);
+	}
 	s->fiber = m;
 	GC_ADDREF(&m->std);
 	for (;;) {
@@ -536,6 +563,20 @@ ZEND_METHOD(phasync_ext_Suspension, manage)
 static phasync_susp *phasync_this_susp(zval *this_zv)
 {
 	return phasync_susp_from(Z_OBJ_P(this_zv));
+}
+
+ZEND_METHOD(phasync_ext_Suspension, getScope)
+{
+	phasync_susp *s;
+
+	ZEND_PARSE_PARAMETERS_NONE();
+	s = phasync_this_susp(ZEND_THIS);
+	if (Z_ISUNDEF(s->scope)) {
+		zend_throw_error(NULL, s->state == PHASYNC_S_RETIRED ? "This Suspension was already resumed"
+			: "The Scope class is not available");
+		RETURN_THROWS();
+	}
+	RETURN_COPY(&s->scope);
 }
 
 ZEND_METHOD(phasync_ext_Suspension, isReady)
