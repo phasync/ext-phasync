@@ -410,7 +410,7 @@ declarations, other globals, shutdown functions and error handlers are the worke
 
 `sapi()` and `Scope` are independent and compose. `sapi()` does not create, enter or read a Scope. It
 touches no superglobal except `$_SESSION`: `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_REQUEST` and
-`$_SERVER` are the host's, plain globals shared by all requests, while `$_SESSION` follows the
+`$_SERVER` are Scope state, which the host writes in the Scope it runs the request in, while `$_SESSION` follows the
 installed request the same way ext/session itself keeps it in step with `session_start()`. Concurrent
 `sapi()` calls in one Scope, or in the root scope, keep their output, headers, body and session apart.
 

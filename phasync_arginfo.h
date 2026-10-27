@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 29bc91ebca54a9dab8cef037f05c1404f15d4ff7 */
+ * Stub hash: 7921a61b5e02366851c91eb4f9d6b5af95798fe7 */
 
 /* Hand-maintained: never regenerate it with gen_stub (PHP 8.3 has no frameless
  * infos in ZEND_RAW_FENTRY, PHASYNC_RAW_FENTRY adapts). */

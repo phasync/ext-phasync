@@ -120,9 +120,8 @@ function manage(\Closure $task, Poller $poller, \Closure $sleep, string $timeout
  * in one worker. This is the SAPI-facing side of a web server written in PHP,
  * and nothing else: sapi() and \Scope are independent and compose. sapi() does
  * not create, enter or read a Scope, and touches no superglobal: the host writes
- * $_GET, $_POST, $_COOKIE, $_FILES and $_REQUEST inside the Scope it runs the
- * request in (they are Scope state), and $_SERVER is a plain global shared by all
- * requests. Concurrent sapi() calls in one Scope, or in the root scope, are
+ * $_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST and $_SERVER inside the Scope it
+ * runs the request in (they are Scope state). Concurrent sapi() calls in one Scope, or in the root scope, are
  * fully independent for the SAPI state above. Nothing else is isolated: not
  * statics, declarations, other globals, the session, shutdown functions or
  * error handlers.
