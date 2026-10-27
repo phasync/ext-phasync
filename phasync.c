@@ -41,6 +41,7 @@
  * still carries its own forward declaration (as the pre-split phasync.c
  * did) -- see phasync_internal.h for the ones shared by more than one. */
 #include "poller.c"
+#include "suspension.c"
 #include "io.c"
 #include "blocking.c"
 #include "fs.c"
@@ -198,13 +199,13 @@ static PHP_MINIT_FUNCTION(phasync)
 		}
 		phasync_scope_bundled = true;
 	}
-	phasync_poller_ce = register_class_phasync_ext_Poller();
+	phasync_poller_ce = register_class_phasync_ext_internal_Poller();
 	phasync_poller_ce->create_object = phasync_poller_create;
 	memcpy(&phasync_poller_handlers, &std_object_handlers, sizeof(zend_object_handlers));
 	phasync_poller_handlers.offset = offsetof(phasync_poller, std);
 	phasync_poller_handlers.free_obj = phasync_poller_free;
-	phasync_poller_handlers.get_gc = phasync_poller_get_gc;
 	phasync_poller_handlers.clone_obj = NULL;
+	phasync_suspension_minit();
 	pthread_atfork(phasync_preempt_fork_prepare, phasync_preempt_fork_parent, phasync_fork_child);
 	zend_hash_init(&phasync_suspend_roots, 8, NULL, NULL, 1);
 	zend_observer_fiber_destroy_register(phasync_ledger_fiber_destroy);
@@ -409,89 +410,13 @@ static bool phasync_memcached_sessions_unsafe(void)
 	    && zend_ini_long("memcached.sess_persistent", sizeof("memcached.sess_persistent") - 1, false);
 }
 
-ZEND_FUNCTION(phasync_ext_manage)
-{
-	zval *code, *poller, *sleep;
-	zend_string *timeout_name;
-	zend_class_entry *timeout_ce;
-	phasync_scope frame;
-	zval retval;
-
-	ZEND_PARSE_PARAMETERS_START(4, 4)
-		Z_PARAM_OBJECT_OF_CLASS(code, zend_ce_closure)
-		Z_PARAM_OBJECT_OF_CLASS(poller, phasync_poller_ce)
-		Z_PARAM_OBJECT_OF_CLASS(sleep, zend_ce_closure)
-		Z_PARAM_STR(timeout_name)
-	ZEND_PARSE_PARAMETERS_END();
-
-	/* park() throwing an instance of this class (subclasses included) after the
-	 * native timeout ran out ends the wait the way a native timeout does. */
-	timeout_ce = zend_lookup_class(timeout_name);
-	if (timeout_ce == NULL || !instanceof_function(timeout_ce, zend_ce_throwable)) {
-		if (!EG(exception)) {
-			zend_argument_value_error(4, "must be the name of an existing Throwable class");
-		}
-		RETURN_THROWS();
-	}
-
-	if (PHASYNC_G(scope_top) == NULL && phasync_memcached_sessions_unsafe()) {
-		zend_throw_exception(spl_ce_LogicException, "memcached.sess_persistent=1 with "
-			"session.save_handler=memcached shares a persistent connection between "
-			"coroutines without the per-handle lock, and its session lock wait blocks "
-			"the process; manage() refuses to run with this combination -- set "
-			"memcached.sess_persistent=0, or use another session handler (see README, "
-			"Memcached)", 0);
-		RETURN_THROWS();
-	}
-
-	/* Push this scope (owned references), linked to the enclosing one. */
-	ZVAL_COPY(&frame.poller_zv, poller);
-	frame.poller = phasync_poller_from(Z_OBJ_P(poller));
-	ZVAL_COPY(&frame.sleep, sleep);
-	frame.timeout_ce = timeout_ce;
-	frame.prev = PHASYNC_G(scope_top);
-	PHASYNC_G(scope_top) = &frame;
-
-	phasync_install_hooks();   /* idempotent; first manage() of the request installs */
-	phasync_holds_release();
-	if (frame.prev == NULL) {
-		/* Entering the outermost scope: wrap fd-backed streams that appeared after
-		 * RINIT's walk — notably the STDIN/STDOUT/STDERR constants, which the CLI
-		 * SAPI materialises only once execution starts, and files opened before this
-		 * scope. Idempotent and cheap. */
-		phasync_wrap_existing_streams(true);
-	}
-
-	ZVAL_UNDEF(&retval);
-	/* zend_try/zend_catch guarantees the pop even on a fatal bailout (which
-	 * longjmps past normal C control flow); a thrown PHP exception is the
-	 * ordinary path — call_user_function returns and EG(exception) is set. */
-	zend_try {
-		call_user_function(NULL, NULL, code, &retval, 0, NULL);
-	} zend_catch {
-		PHASYNC_G(scope_top) = frame.prev;
-		zval_ptr_dtor(&frame.poller_zv);
-		zval_ptr_dtor(&frame.sleep);
-		zend_bailout();
-	} zend_end_try();
-
-	PHASYNC_G(scope_top) = frame.prev;
-	zval_ptr_dtor(&frame.poller_zv);
-	zval_ptr_dtor(&frame.sleep);
-
-	if (Z_ISUNDEF(retval)) {
-		RETURN_NULL();   /* $code threw (exception pending) or returned nothing */
-	}
-	RETURN_COPY_VALUE(&retval);
-}
-
 static PHP_RINIT_FUNCTION(phasync)
 {
 	if (phasync_scope_bundled) {
 		scope_module_entry.request_startup_func(type, module_number);
 	}
 
-	PHASYNC_G(scope_top) = NULL;
+	phasync_suspension_rinit();
 	PHASYNC_G(spawn) = NULL;
 	PHASYNC_G(ub_writing) = false;
 	PHASYNC_G(hooks_installed) = 0;
@@ -525,10 +450,7 @@ static PHP_RSHUTDOWN_FUNCTION(phasync)
 	ZVAL_UNDEF(&PHASYNC_G(preempt_fn));
 	phasync_req_rshutdown();
 	phasync_restore_hooks();
-	/* Any manage() scopes have unwound already (their frames live on the C
-	 * stack); nothing to free here. Leave the hooked table intact: streams may
-	 * close later in shutdown. */
-	PHASYNC_G(scope_top) = NULL;
+	/* Leave the hooked table intact: streams may close later in shutdown. */
 	/* Fibers PHP freed without resuming them (after a fatal error): settle what
 	 * the extension still holds for them. */
 	{
@@ -538,6 +460,7 @@ static PHP_RSHUTDOWN_FUNCTION(phasync)
 		} ZEND_HASH_FOREACH_END();
 		zend_hash_clean(&PHASYNC_G(ledgers));
 	}
+	phasync_suspension_rshutdown();
 	if (phasync_scope_bundled) {
 		scope_module_entry.request_shutdown_func(type, module_number);
 	}

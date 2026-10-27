@@ -354,7 +354,7 @@ static void phasync_pool_submit(phasync_task *t)
  * thread and fails with ECANCELED (the exception pending). */
 static void phasync_pool_run(phasync_task *t)
 {
-	phasync_poller *p = PHASYNC_G(scope_top) ? PHASYNC_G(scope_top)->poller : NULL;
+	phasync_poller *p = phasync_scope_top() ? phasync_scope_top()->poller : NULL;
 	phasync_ledger *l;
 	phasync_task *h;
 
@@ -380,7 +380,7 @@ static void phasync_pool_run(phasync_task *t)
  * pool would deadlock when reader- and writer-opens outnumber the workers. */
 static void phasync_pool_run_dedicated(phasync_task *t)
 {
-	phasync_poller *p = PHASYNC_G(scope_top) ? PHASYNC_G(scope_top)->poller : NULL;
+	phasync_poller *p = phasync_scope_top() ? phasync_scope_top()->poller : NULL;
 	phasync_ledger *l;
 	phasync_task *h;
 	pthread_attr_t attr;

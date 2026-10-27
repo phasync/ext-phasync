@@ -13,13 +13,6 @@ ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_phasync_ext_set_preempt_function,
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, minInterval, IS_DOUBLE, 0, "0.1")
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_phasync_ext_manage, 0, 4, IS_MIXED, 0)
-	ZEND_ARG_OBJ_INFO(0, task, Closure, 0)
-	ZEND_ARG_OBJ_INFO(0, poller, phasync\\ext\\Poller, 0)
-	ZEND_ARG_OBJ_INFO(0, sleep, Closure, 0)
-	ZEND_ARG_TYPE_INFO(0, timeoutException, IS_STRING, 0)
-ZEND_END_ARG_INFO()
-
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_phasync_ext_sapi, 0, 2, IS_MIXED, 0)
 	ZEND_ARG_OBJ_INFO(0, code, Closure, 0)
 	ZEND_ARG_TYPE_INFO(0, sapi, IS_OBJECT, 0)
@@ -41,38 +34,52 @@ ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_phasync_ext_io_stats, 0, 0, IS_ARRAY, 0)
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_INFO_EX(arginfo_class_phasync_ext_Poller___construct, 0, 0, 3)
-	ZEND_ARG_OBJ_INFO(0, getSlot, Closure, 0)
-	ZEND_ARG_OBJ_INFO(0, park, Closure, 0)
-	ZEND_ARG_OBJ_INFO(0, unpark, Closure, 0)
+ZEND_BEGIN_ARG_INFO_EX(arginfo_class_phasync_ext_Suspension___construct, 0, 0, 0)
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Poller_poll, 0, 1, IS_VOID, 0)
-	ZEND_ARG_TYPE_INFO(0, maxTime, IS_DOUBLE, 0)
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Suspension_poll, 0, 2, IS_ARRAY, 0)
+	ZEND_ARG_TYPE_INFO(0, suspensions, IS_ARRAY, 0)
+	ZEND_ARG_TYPE_INFO(0, seconds, IS_DOUBLE, 0)
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Poller_readable, 0, 1, IS_VOID, 0)
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_class_phasync_ext_Suspension_manage, 0, 1, Fiber, 0)
+	ZEND_ARG_OBJ_INFO(0, fiber, Fiber, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Suspension_readable, 0, 1, _IS_BOOL, 0)
 	ZEND_ARG_TYPE_INFO(0, stream, IS_MIXED, 0)
-	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, timeout, IS_DOUBLE, 0, "PHP_FLOAT_MAX")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, timeout, IS_DOUBLE, 1, "null")
 ZEND_END_ARG_INFO()
 
-#define arginfo_class_phasync_ext_Poller_writable arginfo_class_phasync_ext_Poller_readable
+#define arginfo_class_phasync_ext_Suspension_writable arginfo_class_phasync_ext_Suspension_readable
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Suspension_isReady, 0, 0, _IS_BOOL, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Suspension_resume, 0, 0, IS_MIXED, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Suspension_throw, 0, 1, IS_MIXED, 0)
+	ZEND_ARG_OBJ_INFO(0, exception, Throwable, 0)
+ZEND_END_ARG_INFO()
 
 ZEND_FUNCTION(phasync_ext_set_preempt_function);
-ZEND_FUNCTION(phasync_ext_manage);
 ZEND_FUNCTION(phasync_ext_sapi);
 ZEND_FUNCTION(phasync_ext_run_next);
 ZEND_FUNCTION(phasync_ext_dup2);
 ZEND_FUNCTION(phasync_ext_include_global);
 ZEND_FUNCTION(phasync_ext_io_stats);
-ZEND_METHOD(phasync_ext_Poller, __construct);
-ZEND_METHOD(phasync_ext_Poller, poll);
-ZEND_METHOD(phasync_ext_Poller, readable);
-ZEND_METHOD(phasync_ext_Poller, writable);
+ZEND_METHOD(phasync_ext_Suspension, __construct);
+ZEND_METHOD(phasync_ext_Suspension, poll);
+ZEND_METHOD(phasync_ext_Suspension, manage);
+ZEND_METHOD(phasync_ext_Suspension, readable);
+ZEND_METHOD(phasync_ext_Suspension, writable);
+ZEND_METHOD(phasync_ext_Suspension, isReady);
+ZEND_METHOD(phasync_ext_Suspension, resume);
+ZEND_METHOD(phasync_ext_Suspension, throw);
 
 static const zend_function_entry ext_functions[] = {
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "set_preempt_function"), zif_phasync_ext_set_preempt_function, arginfo_phasync_ext_set_preempt_function, 0, NULL, NULL)
-	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "manage"), zif_phasync_ext_manage, arginfo_phasync_ext_manage, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "sapi"), zif_phasync_ext_sapi, arginfo_phasync_ext_sapi, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "run_next"), zif_phasync_ext_run_next, arginfo_phasync_ext_run_next, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "dup2"), zif_phasync_ext_dup2, arginfo_phasync_ext_dup2, 0, NULL, NULL)
@@ -81,11 +88,15 @@ static const zend_function_entry ext_functions[] = {
 	ZEND_FE_END
 };
 
-static const zend_function_entry class_phasync_ext_Poller_methods[] = {
-	ZEND_ME(phasync_ext_Poller, __construct, arginfo_class_phasync_ext_Poller___construct, ZEND_ACC_PUBLIC)
-	ZEND_ME(phasync_ext_Poller, poll, arginfo_class_phasync_ext_Poller_poll, ZEND_ACC_PUBLIC)
-	ZEND_ME(phasync_ext_Poller, readable, arginfo_class_phasync_ext_Poller_readable, ZEND_ACC_PUBLIC)
-	ZEND_ME(phasync_ext_Poller, writable, arginfo_class_phasync_ext_Poller_writable, ZEND_ACC_PUBLIC)
+static const zend_function_entry class_phasync_ext_Suspension_methods[] = {
+	ZEND_ME(phasync_ext_Suspension, __construct, arginfo_class_phasync_ext_Suspension___construct, ZEND_ACC_PRIVATE)
+	ZEND_ME(phasync_ext_Suspension, poll, arginfo_class_phasync_ext_Suspension_poll, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC)
+	ZEND_ME(phasync_ext_Suspension, manage, arginfo_class_phasync_ext_Suspension_manage, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC)
+	ZEND_ME(phasync_ext_Suspension, readable, arginfo_class_phasync_ext_Suspension_readable, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC)
+	ZEND_ME(phasync_ext_Suspension, writable, arginfo_class_phasync_ext_Suspension_writable, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC)
+	ZEND_ME(phasync_ext_Suspension, isReady, arginfo_class_phasync_ext_Suspension_isReady, ZEND_ACC_PUBLIC)
+	ZEND_ME(phasync_ext_Suspension, resume, arginfo_class_phasync_ext_Suspension_resume, ZEND_ACC_PUBLIC)
+	ZEND_ME(phasync_ext_Suspension, throw, arginfo_class_phasync_ext_Suspension_throw, ZEND_ACC_PUBLIC)
 	ZEND_FE_END
 };
 
@@ -100,12 +111,28 @@ static zend_class_entry *phasync_register_class(zend_class_entry *ce, uint32_t f
 #endif
 }
 
-static zend_class_entry *register_class_phasync_ext_Poller(void)
+/* The request's poller (suspension.c creates it): not instantiable from PHP. */
+static zend_class_entry *register_class_phasync_ext_internal_Poller(void)
 {
 	zend_class_entry ce, *class_entry;
 
-	INIT_NS_CLASS_ENTRY(ce, "phasync\\ext", "Poller", class_phasync_ext_Poller_methods);
-	class_entry = phasync_register_class(&ce, ZEND_ACC_FINAL|ZEND_ACC_NO_DYNAMIC_PROPERTIES|ZEND_ACC_NOT_SERIALIZABLE);
+	INIT_NS_CLASS_ENTRY(ce, "phasync\\ext\\internal", "Poller", NULL);
+	class_entry = phasync_register_class(&ce, ZEND_ACC_FINAL|ZEND_ACC_EXPLICIT_ABSTRACT_CLASS|ZEND_ACC_NO_DYNAMIC_PROPERTIES|ZEND_ACC_NOT_SERIALIZABLE);
+
+	return class_entry;
+}
+
+static zend_class_entry *register_class_phasync_ext_Suspension(zend_class_entry *class_entry_Exception)
+{
+	zend_class_entry ce, *class_entry;
+
+	INIT_NS_CLASS_ENTRY(ce, "phasync\\ext", "Suspension", class_phasync_ext_Suspension_methods);
+#if PHP_VERSION_ID >= 80400
+	class_entry = zend_register_internal_class_with_flags(&ce, class_entry_Exception, ZEND_ACC_FINAL|ZEND_ACC_NO_DYNAMIC_PROPERTIES|ZEND_ACC_NOT_SERIALIZABLE);
+#else
+	class_entry = zend_register_internal_class_ex(&ce, class_entry_Exception);
+	class_entry->ce_flags |= ZEND_ACC_FINAL|ZEND_ACC_NO_DYNAMIC_PROPERTIES|ZEND_ACC_NOT_SERIALIZABLE;
+#endif
 
 	return class_entry;
 }

@@ -234,55 +234,7 @@ static bool phasync_poller_usable(phasync_poller *p)
 	return false;
 }
 
-/* A new slot from the loop's getSlot(); -1 if it threw. */
-static zend_long phasync_get_slot(phasync_poller *p)
-{
-	zval retval;
-	zend_long slot = -1;
-
-	ZVAL_UNDEF(&retval);
-	if (call_user_function(NULL, NULL, &p->get_slot, &retval, 0, NULL) == SUCCESS && !EG(exception)) {
-		slot = zval_get_long(&retval);
-	}
-	zval_ptr_dtor(&retval);
-	return slot;
-}
-
-/* Park the current coroutine in $slot. READY when unparked. With a timeout
- * class (the manage() scope's, for a hooked call with a native timeout), park()
- * throwing it once the timeout given has run out clears the exception: TIMEOUT,
- * finish the op the way PHP does on a timeout. Otherwise (the public
- * readable()/writable(), or any other exception, a cancellation) it stays
- * pending: ERROR. */
-static int phasync_park(phasync_poller *p, zend_long slot, double timeout, zend_class_entry *timeout_ce)
-{
-	zval args[2], retval;
-	double deadline = isinf(timeout) ? INFINITY : phasync_now() + timeout;
-	int rc = PHASYNC_WAIT_READY;
-
-	if (phasync_cannot_suspend()) {
-		return PHASYNC_WAIT_ERROR;
-	}
-	ZVAL_LONG(&args[0], slot);
-	ZVAL_DOUBLE(&args[1], isinf(timeout) ? DBL_MAX : timeout);
-	ZVAL_UNDEF(&retval);
-	if (call_user_function(NULL, NULL, &p->park, &retval, 2, args) == FAILURE) {
-		rc = PHASYNC_WAIT_ERROR;
-	} else if (EG(exception)) {
-		if (timeout_ce && !isinf(deadline) && instanceof_function(EG(exception)->ce, timeout_ce)
-		 && phasync_now() + 0.001 >= deadline) {
-			zend_clear_exception();
-			rc = PHASYNC_WAIT_TIMEOUT;
-		} else {
-			rc = PHASYNC_WAIT_ERROR;
-		}
-	}
-	zval_ptr_dtor(&retval);
-	if (rc != PHASYNC_WAIT_READY) {
-		phasync_chan_purge(p->chan, slot);
-	}
-	return rc;
-}
+/* Slots, parking and unparking are the Suspension pool's: see suspension.c. */
 
 /* ---- backend seam: the kernel queue (epoll, kqueue) is touched only through
  * these and phasync_poller_epoll_wait(); IOCP would replace them. */
@@ -881,12 +833,10 @@ static int phasync_poller_wait(phasync_poller *p, int dir, php_stream *stream, p
 		rc = PHASYNC_WAIT_ERROR;
 		goto done;
 	}
-	if ((slot = r->hooked && r->sid[idx] >= 0 ? r->sid[idx] : phasync_get_slot(p)) < 0) {
+	/* A Suspension of its own for every wait: the loop may still hold the last one. */
+	if ((slot = phasync_get_slot(p)) < 0) {
 		rc = PHASYNC_WAIT_ERROR;
 		goto done;
-	}
-	if (r->hooked) {
-		r->sid[idx] = slot;
 	}
 	r->slot[idx] = slot;
 	p->armed++;
@@ -940,9 +890,6 @@ static zend_object *phasync_poller_create(zend_class_entry *ce)
 	p->epfd = -1;
 	p->fork_gen = phasync_fork_gen;
 	p->select_mode = true;   /* 0 watched fds: starts below the threshold */
-	ZVAL_UNDEF(&p->get_slot);
-	ZVAL_UNDEF(&p->park);
-	ZVAL_UNDEF(&p->unpark);
 	zend_hash_init(&p->regs, 16, NULL, phasync_reg_dtor, 1);
 	p->next = phasync_pollers;
 	phasync_pollers = p;
@@ -974,41 +921,15 @@ static void phasync_poller_free(zend_object *obj)
 			phasync_chan_close(p->chan); /* its mutex may be the parent's, held at fork */
 		}
 	}
-	zval_ptr_dtor(&p->get_slot);
-	zval_ptr_dtor(&p->park);
-	zval_ptr_dtor(&p->unpark);
 	zend_object_std_dtor(obj);
 }
 
-/* The closures usually capture the loop that owns the Poller: let the cycle
- * collector see them. */
-static HashTable *phasync_poller_get_gc(zend_object *obj, zval **table, int *n)
+/* Create its epoll set and completion channel. False (errno set) on failure. */
+static bool phasync_poller_init(phasync_poller *p)
 {
-	phasync_poller *p = phasync_poller_from(obj);
-
-	*table = &p->get_slot;               /* get_slot, park, unpark are adjacent */
-	*n = 3;
-	return zend_std_get_properties(obj);
-}
-
-ZEND_METHOD(phasync_ext_Poller, __construct)
-{
-	zval *get_slot, *park, *unpark;
-	phasync_poller *p = phasync_poller_from(Z_OBJ_P(ZEND_THIS));
-	phasync_chan *ch;
+	phasync_chan *ch = calloc(1, sizeof(*ch));
 	bool chan_added = false;
 
-	ZEND_PARSE_PARAMETERS_START(3, 3)
-		Z_PARAM_OBJECT_OF_CLASS(get_slot, zend_ce_closure)
-		Z_PARAM_OBJECT_OF_CLASS(park, zend_ce_closure)
-		Z_PARAM_OBJECT_OF_CLASS(unpark, zend_ce_closure)
-	ZEND_PARSE_PARAMETERS_END();
-
-	if (p->epfd >= 0) {
-		zend_throw_error(NULL, "The Poller is already constructed");
-		RETURN_THROWS();
-	}
-	ch = calloc(1, sizeof(*ch));
 	phasync_backend_create(p);
 	if (ch) {
 		phasync_chan_open(ch);
@@ -1019,27 +940,14 @@ ZEND_METHOD(phasync_ext_Poller, __construct)
 			if (ch->evfd >= 0) phasync_chan_close(ch);
 			free(ch);
 		}
-		zend_throw_error(NULL, "Unable to create the epoll set: %s", strerror(err));
-		RETURN_THROWS();
+		errno = err;
+		return false;
 	}
 	pthread_mutex_init(&ch->mutex, NULL);
 	ch->refs = 1;
 	p->chan = ch;
 	phasync_backend_set(p, ch->evfd, PHASYNC_EV_IN, &chan_added);   /* its own fd, never a reg's: see poll() */
-	ZVAL_COPY(&p->get_slot, get_slot);
-	ZVAL_COPY(&p->park, park);
-	ZVAL_COPY(&p->unpark, unpark);
-}
-
-static phasync_poller *phasync_this_poller(zval *this_zv)
-{
-	phasync_poller *p = phasync_poller_from(Z_OBJ_P(this_zv));
-
-	if (p->epfd < 0) {
-		zend_throw_error(NULL, "The Poller is not constructed");
-		return NULL;
-	}
-	return phasync_poller_usable(p) ? p : NULL;
+	return true;
 }
 
 /* The event loop's one blocking call: wait up to $maxTime seconds (0: don't
@@ -1239,92 +1147,3 @@ static int phasync_poller_select_wait(phasync_poller *p, double max_time, zend_l
 	} ZEND_HASH_FOREACH_END();
 	return 0;
 }
-
-ZEND_METHOD(phasync_ext_Poller, poll)
-{
-	double max_time;
-	zend_long wake_stack[512], *wake = wake_stack;
-	size_t nwake = 0, cap = sizeof(wake_stack) / sizeof(wake_stack[0]);
-	phasync_poller *p;
-	int rc;
-
-	ZEND_PARSE_PARAMETERS_START(1, 1)
-		Z_PARAM_DOUBLE(max_time)
-	ZEND_PARSE_PARAMETERS_END();
-
-	if ((p = phasync_this_poller(ZEND_THIS)) == NULL) {
-		RETURN_THROWS();
-	}
-	phasync_holds_release();
-	if (EG(exception)) {
-		RETURN_THROWS();
-	}
-	if (max_time <= 0 && p->armed == 0) {
-		/* The loop polls without waiting on every tick while it has work: with no
-		 * descriptor waited on and no finished thread task queued, skip the syscall. */
-		size_t queued;
-		pthread_mutex_lock(&p->chan->mutex);
-		queued = p->chan->len;
-		pthread_mutex_unlock(&p->chan->mutex);
-		if (queued == 0) {
-			return;
-		}
-	}
-	rc = p->select_mode ? phasync_poller_select_wait(p, max_time, &wake, wake_stack, &nwake, &cap)
-	                     : phasync_poller_epoll_wait(p, max_time, &wake, wake_stack, &nwake, &cap);
-	if (rc != 0) {
-		if (wake != wake_stack) {
-			efree(wake);
-		}
-		if (rc < 0) {
-			RETURN_THROWS();
-		}
-		return;
-	}
-	for (size_t i = 0; i < nwake && !EG(exception); i++) {
-		zval arg, retval;
-		ZVAL_LONG(&arg, wake[i]);
-		ZVAL_UNDEF(&retval);
-		call_user_function(NULL, NULL, &p->unpark, &retval, 1, &arg);
-		zval_ptr_dtor(&retval);
-	}
-	if (wake != wake_stack) {
-		efree(wake);
-	}
-}
-
-static void phasync_poller_wait_method(INTERNAL_FUNCTION_PARAMETERS, int dir)
-{
-	zval *zstream;
-	double timeout = DBL_MAX;
-	php_stream *stream;
-	phasync_poller *p;
-
-	ZEND_PARSE_PARAMETERS_START(1, 2)
-		Z_PARAM_RESOURCE(zstream)
-		Z_PARAM_OPTIONAL
-		Z_PARAM_DOUBLE(timeout)
-	ZEND_PARSE_PARAMETERS_END();
-
-	php_stream_from_zval(stream, zstream);
-	if ((p = phasync_this_poller(ZEND_THIS)) == NULL) {
-		RETURN_THROWS();
-	}
-	if (EG(active_fiber) == NULL) {
-		zend_throw_error(NULL, "Poller::%s() must be called in a coroutine", dir == PHASYNC_READ ? "readable" : "writable");
-		RETURN_THROWS();
-	}
-	/* The loop's exceptions (a timeout, a cancellation) reach the caller as they are. */
-	phasync_poller_wait(p, dir, stream, phasync_stream_fd(stream), timeout >= DBL_MAX ? INFINITY : timeout, NULL, true);
-}
-
-ZEND_METHOD(phasync_ext_Poller, readable)
-{
-	phasync_poller_wait_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, PHASYNC_READ);
-}
-
-ZEND_METHOD(phasync_ext_Poller, writable)
-{
-	phasync_poller_wait_method(INTERNAL_FUNCTION_PARAM_PASSTHRU, PHASYNC_WRITE);
-}
-

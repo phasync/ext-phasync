@@ -40,22 +40,15 @@ static bool phasync_cannot_suspend(void)
 	return true;
 }
 
-/* Call the sleep handler as handler(int $microseconds); -1 if it threw. */
+/* Sleep usec microseconds in the managed fiber (the handler is phasync_sleep_handler()'s
+ * marker); -1 if it threw. */
 static int phasync_call_sleep(zval *handler, zend_long usec)
 {
-	zval arg, retval;
-	int rc = 0;
-
+	(void) handler;
 	if (phasync_cannot_suspend()) {
 		return -1;
 	}
-	ZVAL_LONG(&arg, usec);
-	ZVAL_UNDEF(&retval);
-	if (call_user_function(NULL, NULL, handler, &retval, 1, &arg) == FAILURE || EG(exception)) {
-		rc = -1;
-	}
-	zval_ptr_dtor(&retval);
-	return rc;
+	return phasync_susp_sleep((double) usec / 1e6);
 }
 
 /* If the stream is a socket, return its netstream data — which holds the timeout
@@ -293,7 +286,7 @@ static void phasync_inflight_destroy_waiters(php_stream *stream)
  * (it began closing while unwinding): it cannot wait, and the unwind is pending. */
 static bool phasync_inflight_drain(php_stream *stream, phasync_inflight *f)
 {
-	phasync_poller *p = PHASYNC_G(scope_top)->poller;
+	phasync_poller *p = phasync_scope_top()->poller;
 	phasync_ledger *l = phasync_ledger_cur();
 	zend_object *held = NULL;
 	bool destroyed_waiters = false;
@@ -363,7 +356,7 @@ static void phasync_inflight_close(php_stream *stream)
 		return;
 	}
 	if (f->waiters) {
-		if (PHASYNC_G(scope_top) == NULL || EG(active_fiber) == NULL) {
+		if (phasync_scope_top() == NULL || EG(active_fiber) == NULL) {
 			zend_error_noreturn(E_ERROR, "phasync: a stream was closed outside a coroutine while %u coroutine(s) wait on it",
 				f->waiters);
 		}
@@ -409,7 +402,7 @@ static bool phasync_close_if_unwinding(php_stream *stream)
  * coroutine of the same worker can never be starved by this one. */
 static int phasync_wait_fd(int dir, php_stream *stream, php_socket_t fd, double timeout)
 {
-	phasync_scope *s = PHASYNC_G(scope_top);
+	phasync_scope *s = phasync_scope_top();
 	int rc;
 
 	if (stream != NULL && !phasync_inflight_enter(stream)) {
@@ -1785,8 +1778,8 @@ static void phasync_select_common(INTERNAL_FUNCTION_PARAMETERS, const char *fnam
 					ncands++;
 				} ZEND_HASH_FOREACH_END();
 			}
-			w = phasync_select_wait(PHASYNC_G(scope_top)->poller, epfd, cands, ncands, remaining,
-				PHASYNC_G(scope_top)->timeout_ce, &closed);
+			w = phasync_select_wait(phasync_scope_top()->poller, epfd, cands, ncands, remaining,
+				phasync_scope_top()->timeout_ce, &closed);
 			close(epfd);
 			if (w == PHASYNC_WAIT_CLOSED) {
 				/* The closed descriptor is reported ready in whichever sets it was
