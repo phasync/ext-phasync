@@ -107,7 +107,7 @@ ZEND_BEGIN_MODULE_GLOBALS(phasync)
 	struct phasync_preempt *preempt; /* Suspension::setPreemptInterval()'s timer, NULL = none */
 	zval *preempt_due;            /* phasync\ext\__PREEMPT_DUE's value: true = a checkpoint calls */
 	struct phasync_susp **susp;   /* the Suspension pool; an index is a wait's slot */
-	uint32_t *susp_spare;         /* indexes of retired ones, reused once only the pool holds them */
+	uint32_t *susp_spare;         /* a stack of indexes of spares: wait over, only the pool holds them */
 	uint32_t nsusp, capsusp, nspare;
 	struct phasync_poller *proc_poller; /* the request's poller, created on first use */
 	phasync_scope proc_scope;

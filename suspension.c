@@ -12,9 +12,10 @@
  * grows to the number of fibers suspended at once and stays there. While a wait is on, the
  * loop owns the Suspension (it was thrown to it) and the Suspension owns the fiber; a loop
  * that drops a pending one drops its fiber too, which is then destroyed as PHP destroys
- * any suspended fiber nobody holds. One whose wait is over goes back into use once only the
- * pool holds it; WeakMap entries and WeakReferences to it are cleared then, as if it had
- * been freed. They are never buffered as GC roots: a
+ * any suspended fiber nobody holds. A Suspension the loop lets go of is freed as far as
+ * PHP code can tell (WeakMap entries and WeakReferences to it are cleared), but the pool
+ * keeps it: once its wait is over too, its index goes on a stack of spares, and the next
+ * wait pops the most recent one. They are never buffered as GC roots: a
  * Suspension holds no PHP values (final, no dynamic properties, Exception's previous and
  * trace stay empty), so it can't take part in a cycle.
  *
@@ -103,20 +104,33 @@ static zend_object *phasync_suspension_create(zend_class_entry *ce)
 	return &s->std;
 }
 
+/* Its wait is over and only the pool holds it: a spare. */
+static void phasync_susp_spare(phasync_susp *s)
+{
+	PHASYNC_G(susp_spare)[PHASYNC_G(nspare)++] = s->idx;
+}
+
 /* The loop let go of a Suspension it was given: the pool takes it back, and releases its
  * fiber if it was still waiting. */
 static void phasync_suspension_dtor(zend_object *obj)
 {
 	phasync_susp *s = phasync_susp_from(obj);
 
-	if (s->owned) {
-		return;
+	if (s->owned || !PHASYNC_G(susp)) {
+		return;                                    /* the pool is gone: freed as usual */
 	}
 	GC_ADDREF(obj);
 	GC_DEL_FLAGS(obj, IS_OBJ_DESTRUCTOR_CALLED);   /* so it comes here again next time */
 	s->owned = true;
-	if (s->fiber) {
-		/* As a dropped fiber is: destroyed now, unless someone else holds it. */
+	if (GC_FLAGS(obj) & IS_OBJ_WEAKLY_REFERENCED) {
+		zend_weakrefs_notify(obj);                 /* as for any object freed now */
+		GC_DEL_FLAGS(obj, IS_OBJ_WEAKLY_REFERENCED);
+	}
+	if (s->state == PHASYNC_S_RETIRED) {
+		phasync_susp_spare(s);
+	} else if (s->fiber) {
+		/* As a dropped fiber is: destroyed now, unless someone else holds it. Unwinding
+		 * its wait retires s, which makes it a spare. */
 		zend_fiber *f = s->fiber;
 		s->fiber = NULL;
 		OBJ_RELEASE(&f->std);
@@ -138,27 +152,18 @@ static void phasync_suspension_free(zend_object *obj)
 /* A Suspension for a new wait, from the pool or new. */
 static phasync_susp *phasync_susp_take(void)
 {
-	uint32_t *spare = PHASYNC_G(susp_spare);
 	phasync_susp *s;
 
-	/* The most recently retired are the likeliest to be held still (the loop is about to
-	 * resume them), so look from the oldest; a few tries bound the cost. */
-	for (uint32_t i = 0, tries = 0; i < PHASYNC_G(nspare) && tries < 8; i++, tries++) {
-		s = PHASYNC_G(susp)[spare[i]];
-		if (GC_REFCOUNT(&s->std) == 1) {
-			spare[i] = spare[--PHASYNC_G(nspare)];
-			if (GC_FLAGS(&s->std) & IS_OBJ_WEAKLY_REFERENCED) {
-				zend_weakrefs_notify(&s->std);
-				GC_DEL_FLAGS(&s->std, IS_OBJ_WEAKLY_REFERENCED);
-			}
+	if (PHASYNC_G(nspare)) {
+		s = PHASYNC_G(susp)[PHASYNC_G(susp_spare)[--PHASYNC_G(nspare)]];
+		ZEND_ASSERT(s->owned && GC_REFCOUNT(&s->std) == 1 && !(GC_FLAGS(&s->std) & IS_OBJ_WEAKLY_REFERENCED));
 #if ZEND_DEBUG
-			{
-				zval *prev = zend_read_property_ex(zend_ce_exception, &s->std, ZSTR_KNOWN(ZEND_STR_PREVIOUS), true, NULL);
-				ZEND_ASSERT(prev == NULL || Z_TYPE_P(prev) == IS_NULL);
-			}
-#endif
-			goto ready;
+		{
+			zval *prev = zend_read_property_ex(zend_ce_exception, &s->std, ZSTR_KNOWN(ZEND_STR_PREVIOUS), true, NULL);
+			ZEND_ASSERT(prev == NULL || Z_TYPE_P(prev) == IS_NULL);
 		}
+#endif
+		goto ready;
 	}
 	if (PHASYNC_G(nsusp) == PHASYNC_G(capsusp)) {
 		uint32_t cap = PHASYNC_G(capsusp) ? PHASYNC_G(capsusp) * 2 : 64;
@@ -176,17 +181,13 @@ ready:
 	return s;
 }
 
-/* Its wait is over: back to the pool, once the loop lets go of it. */
+/* Its wait is over: a spare now if the loop let go of it already, else when it does. */
 static void phasync_susp_retire(phasync_susp *s)
 {
 	if (s->state == PHASYNC_S_RETIRED) {
 		return;
 	}
 	s->state = PHASYNC_S_RETIRED;
-	if (!s->owned) {
-		GC_ADDREF(&s->std);
-		s->owned = true;
-	}
 	if (s->fiber) {
 		zend_fiber *f = s->fiber;
 		s->fiber = NULL;
@@ -196,7 +197,9 @@ static void phasync_susp_retire(phasync_susp *s)
 	ZVAL_UNDEF(&s->members);
 	zval_ptr_dtor(&s->scope);
 	ZVAL_UNDEF(&s->scope);
-	PHASYNC_G(susp_spare)[PHASYNC_G(nspare)++] = s->idx;
+	if (s->owned) {
+		phasync_susp_spare(s);
+	}
 }
 
 static zend_long phasync_get_slot(phasync_poller *p)
