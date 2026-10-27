@@ -42,6 +42,7 @@
 #include "pool.c"
 #include "coroutine.c"
 #include "sapi.c"
+#include "keywords.c"
 
 /* Swerve's script handler (Swerve::accept()) requires an app's entry file
  * (e.g. WordPress's index.php) from inside a method, so its top-level
@@ -153,6 +154,7 @@ PHP_INI_BEGIN()
 	STD_PHP_INI_ENTRY("phasync.fs_offload_types", "", PHP_INI_ALL, phasync_update_fs_offload_types,
 		fs_offload_types, zend_phasync_globals, phasync_globals)
 	PHP_INI_ENTRY("phasync.test_unknown_layouts", "0", PHP_INI_SYSTEM, phasync_update_test_unknown_layouts)
+	PHP_INI_ENTRY("phasync.keywords", "0", PHP_INI_SYSTEM, NULL)
 PHP_INI_END()
 
 /* Scope: bundled fiber-interop/ext-scope (scope/scope.c, a separate translation
@@ -177,6 +179,9 @@ static bool phasync_scope_elsewhere(void)
 static PHP_MINIT_FUNCTION(phasync)
 {
 	REGISTER_INI_ENTRIES();
+	if (INI_BOOL("phasync.keywords")) {
+		phasync_keywords_minit();
+	}
 	if (phasync_scope_elsewhere()) {
 		phasync_scope_bundled = false;
 	} else {
@@ -293,6 +298,7 @@ static PHP_GSHUTDOWN_FUNCTION(phasync)
 
 static PHP_MSHUTDOWN_FUNCTION(phasync)
 {
+	phasync_keywords_mshutdown();
 	if (phasync_scope_bundled) {
 		scope_module_entry.module_shutdown_func(type, module_number);
 		if (scope_module_entry.globals_size) {

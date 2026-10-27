@@ -436,6 +436,28 @@ no finally, like `exit()` -- and `sapi()` returns `null` to its caller, which co
 requests running concurrently in the same worker (each `sapi()` call is its own coroutine) are
 unaffected. Nesting throws. The full contract is the docblock in [`phasync.stub.php`](phasync.stub.php).
 
+### Keywords: `run`, `begin`, `finish`
+
+With `phasync.keywords=1` (`php.ini` or `-d`, not at run time) three words become structured-concurrency
+syntax for phasync:
+
+```php
+$r = run function () { ... };      // \phasync::run(function () { ... })
+$f = begin fetch($url);            // \phasync::go(fetch(...), $url)
+$f = begin fn() => work($m);       // \phasync::go(fn() => work($m))
+$body = finish $f;                 // \phasync::await($f)
+```
+
+`run` and `begin` take a closure literal or a call; in a call, the last call of the chain runs in the
+coroutine, and its callee and arguments are evaluated where the keyword is (`begin $a->b()->c()` calls
+`$a->b()` right away). `finish` binds like `clone`. The words are contextual: each is a keyword only
+where PHP gives a syntax error today (`run(...)`, `Foo::begin`, `$o->finish`, a constant or a label
+named so are untouched), so turning it on changes no working code.
+
+The extension rewrites the tokens before the compiler, beneath opcache, so cached scripts cost
+nothing more; the setting is part of opcache's system id. Line numbers stay. Static analysers, IDEs
+and `nikic/php-parser` don't know the syntax. `vendor/bin/phasync` turns it on.
+
 ### Fresh request, same process: `run_next()`
 
 `run_next($script)` makes the CLI process, once the current script has ended, run `$script` as a new
