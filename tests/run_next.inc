@@ -19,9 +19,13 @@ function rn_exec(string $dir, string $script, array $args = [], ?string $cwd = n
         $cmd[] = '-d';
         $cmd[] = 'extension=' . realpath(ini_get('extension_dir') . '/phasync.so');
     }
-    foreach ($o['load'] ?? [] as $ext) {
-        $cmd[] = '-d';
-        $cmd[] = 'extension=' . PHP_EXTENSION_DIR . "/$ext.so";
+    // The children fork and use alarms. An extension is loaded where it is shared; where it is
+    // compiled in (curl and pcntl differ between builds) there is no file to load
+    foreach (['pcntl', ...$o['load'] ?? []] as $ext) {
+        if (is_file($so = PHP_EXTENSION_DIR . "/$ext.so")) {
+            $cmd[] = '-d';
+            $cmd[] = "extension=$so";
+        }
     }
     foreach (['error_reporting' => '-1', 'log_errors' => '0'] + ($o['ini'] ?? []) as $k => $v) {
         $cmd[] = '-d';
