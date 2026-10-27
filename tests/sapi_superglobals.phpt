@@ -1,5 +1,5 @@
 --TEST--
-sapi() does not touch any superglobal: $_GET, $_POST, $_COOKIE, $_FILES and $_REQUEST are the host's, and $_SERVER is a plain global shared by all requests
+sapi(): a request's $_GET, $_POST, $_COOKIE, $_FILES, $_SERVER and $_REQUEST are registered by PHP's own request startup into the current Scope's superglobals; concurrent requests in their own Scopes each see theirs, and filter_input() the request's own input; the host's are untouched (#10)
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -13,71 +13,44 @@ require __DIR__ . '/sink.inc';
 use function phasync\ext\sapi;
 
 $_GET = ['w' => 'get'];
-$_POST = ['w' => 'post'];
-$_COOKIE = ['w' => 'cookie'];
-$_FILES = ['w' => 'files'];
-$_REQUEST = ['w' => 'request'];
 $_SERVER = ['w' => 'server'];
-$all = fn() => json_encode([$_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST, $_SERVER]);
-$before = $all();
+$before = json_encode([$_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST, $_SERVER]);
 
-// A request with a query string, a form body, a Cookie header: sapi() builds nothing from them.
 $a = new Sink;
 $a->body = 'name=alice';
-$a->info = ['method' => 'POST', 'content_type' => 'application/x-www-form-urlencoded',
-    'content_length' => 10, 'query_string' => 'q=a', 'request_uri' => '/a?q=a'];
+// $_REQUEST follows request_order (run-tests sets GP)
+$a->info = ['method' => 'POST', 'content_type' => 'application/x-www-form-urlencoded', 'content_length' => 10,
+    'query_string' => 'q=a', 'request_uri' => '/a?q=a', 'cookie' => 'c=from%20a', 'server' => ['HTTP_HOST' => 'a.test', 'my.var' => 'dot']];
 $b = new Sink;
-$b->info = ['method' => 'GET', 'query_string' => 'q=b'];
+$b->info = ['method' => 'GET', 'query_string' => 'q=b&list[]=1&list[]=2', 'server' => ['HTTP_HOST' => 'b.test']];
 
 $log = [];
-$request = function (string $who) use (&$log, $all, $before) { return function () use ($who, &$log, $all, $before) {
-    $log[] = "$who before: " . ($all() === $before ? 'untouched' : 'TOUCHED');
-    Fiber::suspend();
-    // $_SERVER is shared: what one request writes the others (and the host) see.
-    $_SERVER[$who] = 1;
-    Fiber::suspend();
-    $log[] = "$who sees: " . implode(',', array_keys($_SERVER));
-    $f = new Fiber(function () use ($who, &$log) { $log[] = "$who fiber sees: " . implode(',', array_keys($_SERVER)); });
+$request = function (string $who) use (&$log) { return function () use ($who, &$log) {
+    Fiber::suspend();                     // the other request starts meanwhile
+    $log[] = "$who: " . json_encode([$_GET, $_POST, $_COOKIE, $_FILES, $_SERVER['HTTP_HOST'], $_SERVER['my_var'] ?? null,
+        is_int($_SERVER['REQUEST_TIME']), $_REQUEST]);
+    $log[] = "$who filter: " . json_encode([filter_input(INPUT_GET, 'q'), filter_input(INPUT_POST, 'name'),
+        filter_input(INPUT_COOKIE, 'c'), filter_input(INPUT_SERVER, 'HTTP_HOST')]);
+    $f = new Fiber(function () use ($who, &$log) { $log[] = "$who fiber: " . $_GET['q']; });
     $f->start();
 }; };
-$fa = new Fiber(fn() => sapi($request('a'), $a));
-$fb = new Fiber(fn() => sapi($request('b'), $b));
+$fa = new Fiber(fn() => (new Scope)->run(fn() => sapi($request('a'), $a)));
+$fb = new Fiber(fn() => (new Scope)->run(fn() => sapi($request('b'), $b)));
 $fa->start();
 $fb->start();
 $fa->resume();
 $fb->resume();
-$fa->resume();
-$fb->resume();
 echo implode("\n", $log), "\n";
-var_dump(array_keys($_SERVER));
-unset($_SERVER['a'], $_SERVER['b']);
-var_dump($all() === $before);
-
-// A request replacing a superglobal replaces the host's.
-sapi(function () { $_GET = ['changed' => 1]; $_SERVER = ['changed' => 1]; }, new Sink);
-var_dump($_GET, $_SERVER);
+var_dump(json_encode([$_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST, $_SERVER]) === $before);
+var_dump(filter_input(INPUT_GET, 'q'), filter_has_var(INPUT_SERVER, 'HTTP_HOST'));
 ?>
 --EXPECT--
-a before: untouched
-b before: untouched
-a sees: w,a,b
-a fiber sees: w,a,b
-b sees: w,a,b
-b fiber sees: w,a,b
-array(3) {
-  [0]=>
-  string(1) "w"
-  [1]=>
-  string(1) "a"
-  [2]=>
-  string(1) "b"
-}
+a: [{"q":"a"},{"name":"alice"},{"c":"from a"},[],"a.test","dot",true,{"q":"a","name":"alice"}]
+a filter: ["a","alice","from a","a.test"]
+a fiber: a
+b: [{"q":"b","list":["1","2"]},[],[],[],"b.test",null,true,{"q":"b","list":["1","2"]}]
+b filter: ["b",null,null,"b.test"]
+b fiber: b
 bool(true)
-array(1) {
-  ["changed"]=>
-  int(1)
-}
-array(1) {
-  ["changed"]=>
-  int(1)
-}
+NULL
+bool(false)

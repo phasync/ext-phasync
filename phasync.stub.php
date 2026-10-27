@@ -117,16 +117,21 @@ final class Suspension extends \Exception
 
 /**
  * Run $code as one web request: it, and every fiber started inside it, have
- * their own output buffers, response headers and request body (php://input,
+ * their own output buffers, response headers, session and request body (php://input,
  * request_parse_body(), uploaded files), so many requests can run concurrently
- * in one worker. This is the SAPI-facing side of a web server written in PHP,
- * and nothing else: sapi() and \Scope are independent and compose. sapi() does
- * not create, enter or read a Scope, and touches no superglobal: the host writes
- * $_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST and $_SERVER inside the Scope it
- * runs the request in (they are Scope state). Concurrent sapi() calls in one Scope, or in the root scope, are
- * fully independent for the SAPI state above. Nothing else is isolated: not
- * statics, declarations, other globals, the session, shutdown functions or
- * error handlers.
+ * in one worker. This is the SAPI-facing side of a web server written in PHP.
+ * Nothing else is isolated: not statics, declarations, other globals, shutdown
+ * functions or error handlers.
+ *
+ * Before $code runs, PHP's own request startup creates $_GET, $_POST, $_COOKIE,
+ * $_FILES, $_SERVER and $_REQUEST from request_info(), as under php-fpm:
+ * variables_order, request_order, max_input_vars, post_max_size,
+ * enable_post_data_reading and the upload limits apply, and their warnings are
+ * reported as "PHP Request Startup". A form POST's body is read before $code
+ * starts (up to post_max_size). filter_input() sees the request's own input.
+ * The superglobals go into the current \Scope, so concurrent sapi() calls need a
+ * Scope each to keep them apart; everything else above is the request's own in
+ * any Scope.
  *
  * $code is a \Closure: a file path or any other callable is a TypeError.
  *
@@ -156,9 +161,10 @@ final class Suspension extends \Exception
  *   called again until it has enough or gets ''. Without it, the request has no
  *   body. php://input is blocking under every SAPI (stream_set_blocking()
  *   changes nothing), so a read() that has to wait suspends the request.
- * - request_info(): array: called once at the start: 'method', 'content_type'
- *   and 'content_length' of the request, as php://input and
- *   request_parse_body() need them, and 'query_string' and 'request_uri'.
+ * - request_info(): array: called once at the start: 'method', 'content_type',
+ *   'content_length', 'query_string' and 'request_uri' of the request, 'cookie'
+ *   (the raw Cookie header) and 'server' (an array of $_SERVER entries; PHP adds
+ *   its own, such as REQUEST_TIME, and nothing from the worker's environment).
  * - connection_aborted(): bool: asked by connection_aborted() and
  *   connection_status(), for a server that knows the client left.
  *

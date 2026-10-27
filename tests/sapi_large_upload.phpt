@@ -18,7 +18,7 @@ $s = new Sink;
 $s->body = "--$bd\r\nContent-Disposition: form-data; name=\"k\"\r\n\r\nv\r\n"
     . "--$bd\r\nContent-Disposition: form-data; name=\"f\"; filename=\"big.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n$file\r\n--$bd--\r\n";
 $s->info = ['method' => 'POST', 'content_type' => "multipart/form-data; boundary=$bd", 'content_length' => strlen($s->body)];
-$r = sapi(function () { [$post, $files] = request_parse_body(); return [$post, $files['f']['error'], $files['f']['size'], md5_file($files['f']['tmp_name'])]; }, $s);
+$r = sapi(fn() => [$_POST, $_FILES['f']['error'], $_FILES['f']['size'], md5_file($_FILES['f']['tmp_name'])], $s);
 var_dump($r[0], $r[1], $r[2], $r[3] === md5($file));
 ?>
 --EXPECT--

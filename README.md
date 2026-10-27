@@ -411,11 +411,16 @@ suspend too. Concurrent requests that use sessions need `sapi()` (Swerve uses it
 ext/session's state belongs to the whole process, whether or not the handler suspends. Nothing else is isolated: statics,
 declarations, other globals, shutdown functions and error handlers are the worker's.
 
-`sapi()` and `Scope` are independent and compose. `sapi()` does not create, enter or read a Scope. It
-touches no superglobal except `$_SESSION`: `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_REQUEST` and
-`$_SERVER` are Scope state, which the host writes in the Scope it runs the request in, while `$_SESSION` follows the
-installed request the same way ext/session itself keeps it in step with `session_start()`. Concurrent
-`sapi()` calls in one Scope, or in the root scope, keep their output, headers, body and session apart.
+A request starts as it does under php-fpm: before `$code` runs, PHP's own request startup creates
+`$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_SERVER` and `$_REQUEST` from what `request_info()`
+returns, with `variables_order`, `request_order`, `max_input_vars`, `post_max_size`,
+`enable_post_data_reading` and the upload limits applied and their warnings reported as
+"PHP Request Startup". A form POST's body is read before `$code` starts (up to `post_max_size`), so
+parsing it never waits for the client. `filter_input()` sees the request's own input. The
+superglobals are written into the current Scope (ext-scope keeps them per Scope), so a host runs each
+`sapi()` call in its own Scope to keep them apart; the output, headers, body and session are the
+request's own either way. `$_SESSION` follows the installed request the way ext/session keeps it in
+step with `session_start()`.
 
 What leaves the request goes to `$sapi` as a SAPI would receive it:
 
@@ -425,7 +430,7 @@ What leaves the request goes to `$sapi` as a SAPI would receive it:
 | `write(string $data): bool` | required; the response body, piece by piece; `false`: the client is gone |
 | `send_headers(int $status, ?string $statusLine, array $headers): void` | required; once, before the first output |
 | `read(int $length): string` | the request body, `''` at its end |
-| `request_info(): array` | `method`, `content_type`, `content_length`, `query_string`, `request_uri`: what `php://input` and `request_parse_body()` need |
+| `request_info(): array` | `method`, `content_type`, `content_length`, `query_string`, `request_uri`, `cookie` (the raw `Cookie` header), `server` (the `$_SERVER` entries, beyond PHP's own) |
 | `flush()`, `connection_aborted(): bool` | `flush()` and the client's departure |
 
 `exit()` is not intercepted: it ends the script as under any SAPI, after the request's output has

@@ -4,6 +4,8 @@
 
 #include "phasync_php.h"
 #include "phasync_arginfo.h"
+#include "ext/filter/php_filter.h"
+#include "main/php_variables.h"
 
 
 typedef struct {

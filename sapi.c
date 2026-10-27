@@ -6,10 +6,17 @@
  * uploaded files) and the session are the coroutine's own, swapped in and out
  * when fibers switch. Fibers started inside belong to the request of the
  * fiber that starts them. What would go to the client goes to the $sapi
- * object, as a SAPI would receive it. sapi() knows nothing of Scope and
- * touches no superglobal. Nothing else is isolated: not statics, declarations,
- * other globals, shutdown functions or error handlers. exit() is not
- * intercepted.
+ * object, as a SAPI would receive it. Nothing else is isolated: not statics,
+ * declarations, other globals, shutdown functions or error handlers. exit() is
+ * not intercepted.
+ *
+ * A request starts as PHP's own do (phasync_req_startup()): its body is read for
+ * a POST form, and $_GET, $_POST, $_COOKIE, $_FILES, $_SERVER and $_REQUEST are
+ * registered by PHP's request-startup code, input filter, max_input_vars,
+ * post_max_size and rfc1867 included. They go to the current Scope's
+ * superglobals (ext-scope keeps them per Scope; the host enters the request's
+ * Scope first); sapi() itself knows nothing of Scope. ext/filter's raw input
+ * arrays (filter_input()) are the request's, swapped like the rest.
  *
  * ext/session's per-request state (id, status, save handler, ...) is reached
  * through phasync_ps (blocking.c's pointer to its module globals), the same
@@ -93,12 +100,27 @@
 	X(auth_password,      SG(request_info).auth_password) \
 	X(auth_digest,        SG(request_info).auth_digest) \
 	PHASYNC_REQ_PARSE_BODY(X) \
+	X(cookie_data,        SG(request_info).cookie_data) \
+	X(argc,               SG(request_info).argc) \
+	X(argv,               SG(request_info).argv) \
+	X(request_time,       SG(global_request_time)) \
 	X(connection_status,  PG(connection_status)) \
 	X(ignore_user_abort,  PG(ignore_user_abort))
+
+/* ext/filter's raw input (filter_input(), filter_has_var()): the request's own.
+ * Swapped when ext/filter is loaded (phasync_if). */
+#define PHASYNC_REQ_FILTER_FIELDS(X) \
+	X(if_get,             phasync_if->get_array) \
+	X(if_post,            phasync_if->post_array) \
+	X(if_cookie,          phasync_if->cookie_array) \
+	X(if_server,          phasync_if->server_array)
+
+static zend_filter_globals *phasync_if;
 
 typedef struct phasync_req_state {
 #define PHASYNC_REQ_DECL(name, live) __typeof__(live) name;
 	PHASYNC_REQ_STATE(PHASYNC_REQ_DECL)
+	PHASYNC_REQ_FILTER_FIELDS(PHASYNC_REQ_DECL)
 #undef PHASYNC_REQ_DECL
 #ifdef PHASYNC_HAVE_SESSION
 #define PHASYNC_REQ_SESSION_DECL(name, live) __typeof__(live) name;
@@ -115,6 +137,9 @@ typedef struct phasync_request {
 	zval sapi;
 	zend_function *m_write, *m_read, *m_send_headers, *m_flush, *m_connection_aborted;
 	phasync_req_state st;              /* the live globals while the request is not installed */
+	zval server;                       /* request_info()'s 'server': $_SERVER's own entries */
+	php_stream *prebody;               /* a POST body read before PHP parses it (phasync_req_startup()) */
+	bool prebody_all;                  /* ...all of it */
 	php_stream *body_seen;             /* the body stream read_post() last filled... */
 	HashTable *bodies_replaced;        /* ...and earlier ones PHP replaced */
 } phasync_request;
@@ -163,6 +188,16 @@ static void phasync_req_install(phasync_request *in)
 #define PHASYNC_REQ_LOAD(name, live) live = st->name;
 	PHASYNC_REQ_STATE(PHASYNC_REQ_LOAD)
 #undef PHASYNC_REQ_LOAD
+	if (phasync_if) {
+		st = out ? &out->st : &phasync_req_root;
+#define PHASYNC_REQ_SAVE(name, live) st->name = live;
+		PHASYNC_REQ_FILTER_FIELDS(PHASYNC_REQ_SAVE)
+#undef PHASYNC_REQ_SAVE
+		st = in ? &in->st : &phasync_req_root;
+#define PHASYNC_REQ_LOAD(name, live) live = st->name;
+		PHASYNC_REQ_FILTER_FIELDS(PHASYNC_REQ_LOAD)
+#undef PHASYNC_REQ_LOAD
+	}
 
 #ifdef PHASYNC_HAVE_SESSION
 	if (phasync_ps) {
@@ -236,6 +271,10 @@ static void phasync_req_state_init(phasync_req_state *st)
 #endif
 	st->proto_num = 1000;
 	st->ignore_user_abort = PG(ignore_user_abort);   /* the ini setting */
+	ZVAL_UNDEF(&st->if_get);                         /* as ext/filter's input_filter_init() */
+	ZVAL_UNDEF(&st->if_post);
+	ZVAL_UNDEF(&st->if_cookie);
+	ZVAL_UNDEF(&st->if_server);
 #ifdef PHASYNC_HAVE_SESSION
 	/* A fresh request's session state, as ext/session's RINIT leaves it: no
 	 * session, the worker's save handler (session.save_handler, and
@@ -330,6 +369,13 @@ static void phasync_req_state_free(phasync_req_state *st)
 	if (st->request_uri) {
 		efree(st->request_uri);
 	}
+	if (st->cookie_data) {
+		efree(st->cookie_data);
+	}
+	zval_ptr_dtor(&st->if_get);
+	zval_ptr_dtor(&st->if_post);
+	zval_ptr_dtor(&st->if_cookie);
+	zval_ptr_dtor(&st->if_server);
 #ifdef PHASYNC_HAVE_SESSION
 	zval_ptr_dtor(&st->sess_http_vars);
 	if (st->sess_id) {
@@ -369,6 +415,10 @@ static void phasync_req_release(phasync_request *r)
 		FREE_HASHTABLE(r->bodies_replaced);
 	}
 	phasync_req_state_free(&r->st);
+	if (r->prebody) {
+		php_stream_free(r->prebody, PHP_STREAM_FREE_CLOSE);
+	}
+	zval_ptr_dtor(&r->server);
 	zval_ptr_dtor(&r->sapi);
 	zend_string_release(r->name);
 	efree(r);
@@ -503,26 +553,12 @@ static void phasync_req_flush(void *server_context)
 	}
 }
 
-/* Like a SAPI's read_post: up to len bytes of $sapi->read(), fewer only at the
- * body's end, where read() returns ''. */
-static size_t phasync_req_read_post(char *buf, size_t len)
+/* Up to len bytes of $sapi->read(), fewer only at the body's end, where read()
+ * returns ''. */
+static size_t phasync_req_read_sapi(phasync_request *r, char *buf, size_t len)
 {
-	phasync_request *r = phasync_req_cur;
 	size_t n = 0;
 
-	if (!r) {
-		return phasync_req_read_post_prev ? phasync_req_read_post_prev(buf, len) : 0;
-	}
-	if (r->body_seen != SG(request_info).request_body) {
-		if (r->body_seen) {
-			if (!r->bodies_replaced) {
-				ALLOC_HASHTABLE(r->bodies_replaced);
-				zend_hash_init(r->bodies_replaced, 2, NULL, NULL, 0);
-			}
-			zend_hash_next_index_insert_ptr(r->bodies_replaced, r->body_seen);
-		}
-		r->body_seen = SG(request_info).request_body;
-	}
 	while (n < len && !r->ended && r->m_read) {
 		zval arg, rv;
 		size_t got;
@@ -545,6 +581,36 @@ static size_t phasync_req_read_post(char *buf, size_t len)
 		n += got;
 	}
 	return n;
+}
+
+/* Like a SAPI's read_post: the body read ahead at startup first, then $sapi->read(). */
+static size_t phasync_req_read_post(char *buf, size_t len)
+{
+	phasync_request *r = phasync_req_cur;
+	size_t n = 0;
+
+	if (!r) {
+		return phasync_req_read_post_prev ? phasync_req_read_post_prev(buf, len) : 0;
+	}
+	if (r->body_seen != SG(request_info).request_body) {
+		if (r->body_seen) {
+			if (!r->bodies_replaced) {
+				ALLOC_HASHTABLE(r->bodies_replaced);
+				zend_hash_init(r->bodies_replaced, 2, NULL, NULL, 0);
+			}
+			zend_hash_next_index_insert_ptr(r->bodies_replaced, r->body_seen);
+		}
+		r->body_seen = SG(request_info).request_body;
+	}
+	if (r->prebody) {
+		ssize_t got = php_stream_read(r->prebody, buf, len);
+
+		n = got > 0 ? (size_t) got : 0;
+		if (n == len || r->prebody_all) {
+			return n;
+		}
+	}
+	return n + phasync_req_read_sapi(r, buf + n, len - n);
 }
 
 /* Headers set in a request are the request's, so the CLI's own handler (which
@@ -615,8 +681,9 @@ static void phasync_req_fiber_destroy(zend_fiber_context *ctx)
 /* ---- sapi() ---- */
 
 /* request_info(): ['method' => ..., 'content_type' => ..., 'content_length' => ...,
- * 'query_string' => ..., 'request_uri' => ...] describes the request, as a SAPI's
- * request_info does. */
+ * 'query_string' => ..., 'request_uri' => ..., 'cookie' => the Cookie header,
+ * 'server' => [...]] describes the request, as a SAPI's request_info and
+ * register_server_variables do. */
 static void phasync_req_request_info(phasync_request *r, zend_function *fn)
 {
 	zval rv, *v;
@@ -638,6 +705,12 @@ static void phasync_req_request_info(phasync_request *r, zend_function *fn)
 		}
 		if ((v = zend_hash_str_find_deref(Z_ARRVAL(rv), ZEND_STRL("request_uri"))) && Z_TYPE_P(v) == IS_STRING) {
 			r->st.request_uri = estrndup(Z_STRVAL_P(v), Z_STRLEN_P(v));
+		}
+		if ((v = zend_hash_str_find_deref(Z_ARRVAL(rv), ZEND_STRL("cookie"))) && Z_TYPE_P(v) == IS_STRING) {
+			r->st.cookie_data = estrndup(Z_STRVAL_P(v), Z_STRLEN_P(v));
+		}
+		if ((v = zend_hash_str_find_deref(Z_ARRVAL(rv), ZEND_STRL("server"))) && Z_TYPE_P(v) == IS_ARRAY) {
+			ZVAL_COPY(&r->server, v);
 		}
 	}
 	zval_ptr_dtor(&rv);
@@ -686,6 +759,129 @@ static void phasync_req_finalize(phasync_request *r)
 	php_output_set_status(PHP_OUTPUT_DISABLED);
 	r->ended = true;
 	phasync_req_restore_exception(ex);
+}
+
+static void (*phasync_req_register_server_prev)(zval *track_vars_array);
+
+/* $_SERVER's own entries, as a SAPI's register_server_variables gives them: request_info()'s
+ * 'server', each through the input filter as php-fpm's are. The CLI's (the process's
+ * environment, the script) are not a web request's. */
+static void phasync_req_register_server(zval *track_vars_array)
+{
+	phasync_request *r = phasync_req_cur;
+	zend_string *key;
+	zval *v;
+
+	if (!r) {
+		if (phasync_req_register_server_prev) {
+			phasync_req_register_server_prev(track_vars_array);
+		}
+		return;
+	}
+	if (Z_TYPE(r->server) != IS_ARRAY) {
+		return;                            /* none given: only what PHP adds itself */
+	}
+	ZEND_HASH_FOREACH_STR_KEY_VAL(Z_ARRVAL(r->server), key, v) {
+		zend_string *str;
+
+		if (!key) {
+			continue;
+		}
+		str = zval_get_string(v);
+		{
+			char *val = estrndup(ZSTR_VAL(str), ZSTR_LEN(str));
+			size_t len = ZSTR_LEN(str);
+
+			if (!sapi_module.input_filter || sapi_module.input_filter(PARSE_SERVER, ZSTR_VAL(key), &val, len, &len)) {
+				php_register_variable_safe(ZSTR_VAL(key), val, len, track_vars_array);
+			}
+			efree(val);
+		}
+		zend_string_release(str);
+	} ZEND_HASH_FOREACH_END();
+}
+
+/* A POST body PHP will parse, read ahead into a temp stream: as far as PHP would read it
+ * (none past post_max_size), so parsing it never waits for the client. The rfc1867 parser
+ * writes $_FILES into PG(http_globals) as it reads, which a Scope switch while it waited
+ * would take away. */
+static void phasync_req_prebuffer(phasync_request *r)
+{
+	zend_long max = SG(post_max_size), cl = SG(request_info).content_length;
+	size_t want = SIZE_MAX;
+	char buf[8192];
+
+	if (max > 0 && cl > max) {
+		return;                            /* PHP warns and reads nothing */
+	}
+	if (cl > 0) {
+		want = (size_t) cl;
+	} else if (max > 0) {
+		want = (size_t) max + 1;           /* enough for PHP to see it is too large */
+	}
+	r->prebody = php_stream_temp_create(TEMP_STREAM_DEFAULT, 2 * 1024 * 1024);
+	while (want > 0) {
+		size_t got = phasync_req_read_sapi(r, buf, MIN(sizeof(buf), want));
+
+		if (got == 0) {
+			r->prebody_all = true;
+			break;
+		}
+		php_stream_write(r->prebody, buf, got);
+		want -= got;
+	}
+	if (want == 0 && cl > 0) {
+		r->prebody_all = true;             /* the declared length: PHP reads no further */
+	}
+	php_stream_rewind(r->prebody);
+}
+
+/* The request's start, as php_request_startup() does it: a POST form's body read and
+ * parsed (sapi_activate()), then the request superglobals created by PHP's own callbacks
+ * (php_hash_environment()), all of them now, since compiled code that names one is cached
+ * and won't ask again. Errors are reported as "PHP Request Startup". */
+static void phasync_req_startup(phasync_request *r)
+{
+	static const char *const names[] = { "_GET", "_POST", "_COOKIE", "_FILES", "_SERVER", "_REQUEST" };
+	static const int tracks[] = { TRACK_VARS_GET, TRACK_VARS_POST, TRACK_VARS_COOKIE, TRACK_VARS_FILES, TRACK_VARS_SERVER, -1 };
+	bool during = PG(during_request_startup), bailed = false, post = false;
+	zend_execute_data *ex = EG(current_execute_data);
+
+	PG(during_request_startup) = 1;
+	if (PG(enable_post_data_reading) && SG(request_info).content_type && SG(request_info).request_method
+	 && strcmp(SG(request_info).request_method, "POST") == 0) {
+		phasync_req_prebuffer(r);
+		post = !EG(exception);
+	}
+	for (size_t i = 0; i < sizeof(tracks) / sizeof(tracks[0]); i++) {
+		if (tracks[i] >= 0) {
+			zval_ptr_dtor(&PG(http_globals)[tracks[i]]);
+			ZVAL_UNDEF(&PG(http_globals)[tracks[i]]);
+		}
+	}
+	phasync_req_register_server_prev = sapi_module.register_server_variables;
+	sapi_module.register_server_variables = phasync_req_register_server;
+	EG(current_execute_data) = NULL;      /* no PHP code runs yet: errors are "in Unknown on line 0" */
+	zend_try {
+		if (post) {
+			sapi_read_post_data();             /* reads the body read ahead: never waits */
+		}
+		for (size_t i = 0; i < sizeof(names) / sizeof(names[0]) && !EG(exception); i++) {
+			zend_auto_global *ag = zend_hash_str_find_ptr(CG(auto_globals), names[i], strlen(names[i]));
+
+			if (ag && ag->auto_global_callback) {
+				ag->armed = ag->auto_global_callback(ag->name);
+			}
+		}
+	} zend_catch {
+		bailed = true;
+	} zend_end_try();
+	EG(current_execute_data) = ex;
+	sapi_module.register_server_variables = phasync_req_register_server_prev;
+	PG(during_request_startup) = during;
+	if (bailed) {
+		zend_bailout();
+	}
 }
 
 ZEND_FUNCTION(phasync_ext_sapi)
@@ -781,7 +977,10 @@ ZEND_FUNCTION(phasync_ext_sapi)
 			 * stops right here and sapi() returns normally to its caller, leaving every other
 			 * concurrently running request (each its own fiber) untouched. */
 			zend_try {
-				call_user_function(NULL, NULL, &fn, &retval, 0, NULL);
+				phasync_req_startup(r);
+				if (!EG(exception)) {
+					call_user_function(NULL, NULL, &fn, &retval, 0, NULL);
+				}
 			} zend_catch {
 				if (!r->aborted) {
 					bailed = true;
@@ -833,6 +1032,19 @@ static void phasync_req_minit(void)
 	phasync_req_sapi_const = zend_hash_str_find_ptr(EG(zend_constants), ZEND_STRL("PHP_SAPI"));
 	/* php_sapi_name() changes inside a request: never evaluated at compile time */
 	((zend_function *) zend_hash_str_find_ptr(CG(function_table), ZEND_STRL("php_sapi_name")))->common.fn_flags &= ~ZEND_ACC_COMPILE_TIME_EVAL;
+	{
+		/* ext/filter's globals: not in its module entry, but filter.default (an
+		 * STD_PHP_INI_ENTRY) carries their address, as the INI system uses it */
+		zend_ini_entry *e = zend_hash_str_find_ptr(EG(ini_directives), ZEND_STRL("filter.default"));
+
+		if (e && e->mh_arg2) {
+#ifdef ZTS
+			phasync_if = TSRMG_BULK(*(int *) e->mh_arg2, zend_filter_globals *);
+#else
+			phasync_if = e->mh_arg2;
+#endif
+		}
+	}
 	zend_observer_fiber_init_register(phasync_req_fiber_init);
 	zend_observer_fiber_switch_register(phasync_req_fiber_switch);
 	zend_observer_fiber_destroy_register(phasync_req_fiber_destroy);

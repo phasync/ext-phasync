@@ -24,7 +24,7 @@ $s->info = ['method' => 'PUT', 'content_type' => 'application/x-www-form-urlenco
 sapi(function () use (&$got) { [$got] = request_parse_body(); }, $s);
 var_dump($got);
 
-// Multipart POST through request_parse_body(); move_uploaded_file() works; a file not moved is gone afterwards.
+// A multipart POST, parsed at the request's start into $_FILES; move_uploaded_file() works; a file not moved is gone afterwards.
 $bd = 'XyZ';
 $s = new Sink;
 $s->body = "--$bd\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nfirst file\r\n"
@@ -33,9 +33,8 @@ $s->info = ['method' => 'POST', 'content_type' => "multipart/form-data; boundary
 $dest = sys_get_temp_dir() . '/phasync_upload_' . getmypid();
 $kept = null;
 sapi(function () use ($dest, &$got, &$kept) {
-    [, $files] = request_parse_body();
-    $kept = $files['g']['tmp_name'];
-    $got = [is_uploaded_file($files['f']['tmp_name']), move_uploaded_file($files['f']['tmp_name'], $dest), file_exists($kept)];
+    $kept = $_FILES['g']['tmp_name'];
+    $got = [is_uploaded_file($_FILES['f']['tmp_name']), move_uploaded_file($_FILES['f']['tmp_name'], $dest), file_exists($kept)];
 }, $s);
 var_dump($got, file_get_contents($dest), file_exists($kept), is_uploaded_file($kept));
 unlink($dest);
