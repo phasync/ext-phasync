@@ -10,6 +10,7 @@ if (!function_exists('stream_socket_pair')) die('skip requires stream_socket_pai
 --FILE--
 <?php
 require __DIR__ . '/loop.inc';
+require __DIR__ . '/timing.inc';
 [$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
 stream_set_timeout($a, 0, 300000);
 
@@ -21,7 +22,7 @@ $t = microtime(true);
     var_dump(fgets($a));                               // string(7) "partial"
     var_dump(stream_get_meta_data($a)['timed_out']);   // bool(true)
 });
-var_dump(round(microtime(true) - $t, 1));               // float(0.3)
+var_dump(in_range(microtime(true) - $t, 0.3));         // the stream's timeout
 
 // 2. A new call starts a fresh, full timeout; fread() on an empty stream that
 //    times out returns false.
@@ -30,7 +31,7 @@ $t = microtime(true);
     var_dump(fread($a, 100));                          // bool(false)
     var_dump(stream_get_meta_data($a)['timed_out']);   // bool(true)
 });
-var_dump(round(microtime(true) - $t, 1));               // float(0.3)
+var_dump(in_range(microtime(true) - $t, 0.3));         // the stream's timeout
 
 // 3. Where native PHP would wait forever (a pipe), the wait has no timeout: it
 //    ends at the child's exit.
@@ -59,10 +60,10 @@ fclose($a); fclose($b); fclose($c); fclose($d);
 --EXPECTF--
 string(7) "partial"
 bool(true)
-float(0.3)
+bool(true)
 bool(false)
 bool(true)
-float(0.3)
+bool(true)
 string(0) ""
 bool(true)
 

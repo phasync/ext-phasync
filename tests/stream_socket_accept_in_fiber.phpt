@@ -7,6 +7,7 @@ phasync
 --FILE--
 <?php
 require __DIR__ . '/loop.inc';
+require __DIR__ . '/timing.inc';
 $srv  = stream_socket_server('tcp://127.0.0.1:0');
 $addr = stream_socket_get_name($srv, false);
 
@@ -31,7 +32,7 @@ $loop = new Loop;
 $loop->runAll(function () use ($srv) {
     $t = microtime(true);
     var_dump(stream_socket_accept($srv, 0.1));
-    var_dump(round(microtime(true) - $t, 1));      // float(0.1): accept's own timeout
+    var_dump(in_range(microtime(true) - $t, 0.1));  // accept's own timeout
     var_dump(stream_socket_accept($srv, 0));
 });
 var_dump($loop->parks);                             // int(1): only the 0.1 s one waited
@@ -42,7 +43,7 @@ A accepted: yes, peer is set
 
 Warning: stream_socket_accept(): Accept failed: %s timed out in %s on line %d
 bool(false)
-float(0.1)
+bool(true)
 
 Warning: stream_socket_accept(): Accept failed: %s timed out in %s on line %d
 bool(false)

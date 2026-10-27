@@ -14,7 +14,7 @@ if (trim((string) shell_exec(escapeshellarg(PHP_BINARY) . ' -r "echo function_ex
 // ext/sockets is usually a shared extension that run-tests' `-n` can't load, so
 // the body runs in a child PHP with the normal ini and the extension loaded.
 $child = tempnam(sys_get_temp_dir(), 'phasync_sx_') . '.php';
-file_put_contents($child, '<?php require ' . var_export(__DIR__ . '/loop.inc', true) . ';' . <<<'CHILD'
+file_put_contents($child, '<?php require ' . var_export(__DIR__ . '/loop.inc', true) . '; require ' . var_export(__DIR__ . '/timing.inc', true) . ';' . <<<'CHILD'
 
 // $op runs in a coroutine beside a ticker; $helper makes it ready after 200ms.
 function coop(string $name, Closure $op, Closure $helper): mixed {
@@ -91,7 +91,7 @@ $timed = function () use ($p) {
 $native = $timed();
 $t = microtime(true);
 (new Loop)->runAll(function () use ($timed, &$ext) { $ext = $timed(); });
-echo 'SO_RCVTIMEO: ', $native === $ext ? 'same' : 'DIFF ' . json_encode([$native, $ext]), ', waited ', round(microtime(true) - $t, 1), " s\n";
+echo 'SO_RCVTIMEO: ', $native === $ext ? 'same' : 'DIFF ' . json_encode([$native, $ext]), ', waited ', in_range(microtime(true) - $t, 0.2) ? 'the timeout' : round(microtime(true) - $t, 3) . ' s', "\n";
 socket_set_option($p[0], SOL_SOCKET, SO_RCVTIMEO, ['sec' => 0, 'usec' => 0]);
 
 // A non-blocking socket stays native: no park.
@@ -136,7 +136,7 @@ bool(true)
 bool(true)
 connect refused: same unable to connect [%d]: Connection refused
 bool(true)
-SO_RCVTIMEO: same, waited 0.2 s
+SO_RCVTIMEO: same, waited the timeout
 non-blocking parks: 0
 read cancelled
 string(4) "kept"
