@@ -22,5 +22,5 @@ if test "$PHP_PHASYNC" != "no"; then
   dnl COMPILE_DL_SCOPE is deliberately left undefined: its ZEND_GET_MODULE(scope)
   dnl must not compile in, since phasync.so is the only module and phasync.c
   dnl drives scope_module_entry itself (see phasync.c, PHP_MINIT(phasync)).
-  PHP_NEW_EXTENSION(phasync, phasync.c scope/scope.c, $ext_shared)
+  PHP_NEW_EXTENSION(phasync, phasync.c scope/scope.c, $ext_shared,, -DZEND_ENABLE_STATIC_TSRMLS_CACHE=1)
 fi
