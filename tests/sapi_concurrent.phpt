@@ -1,5 +1,5 @@
 --TEST--
-sapi(): interleaved requests keep their own output, headers and fibers join the boundary of whoever starts them; $sapi methods run outside
+sapi(): interleaved requests keep their own output, headers and fibers join the request of whoever starts them; $sapi methods run outside the request
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -53,7 +53,7 @@ $fb->start();
 while (!$fa->isTerminated()) $fa->resume();
 var_dump($fa->getReturn(), $fb->getReturn(), $a->out, $b->out);
 
-// $sapi methods run outside the boundary: their echo goes to the worker.
+// $sapi methods run outside the request: their echo goes to the worker.
 $loud = new class extends Sink {
     public function send_headers(int $s, ?string $l, array $h): void { echo "send_headers() speaking in the worker\n"; }
 };
