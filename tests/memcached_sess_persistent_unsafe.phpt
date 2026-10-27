@@ -1,5 +1,5 @@
 --TEST--
-manage() refuses to run when memcached.sess_persistent=1 shares the session handle without the per-handle lock (#5)
+Suspension::manage() refuses to run when memcached.sess_persistent=1 shares the session handle without the per-handle lock (#5)
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -35,5 +35,5 @@ passthru(escapeshellarg(PHP_BINARY)
 unlink($child);
 ?>
 --EXPECT--
-LogicException: memcached.sess_persistent=1 with session.save_handler=memcached shares a persistent connection between coroutines without the per-handle lock, and its session lock wait blocks the process; manage() refuses to run with this combination -- set memcached.sess_persistent=0, or use another session handler (see README, Memcached)
+LogicException: memcached.sess_persistent=1 with session.save_handler=memcached shares a persistent connection between fibers without the per-handle lock; Suspension::manage() refuses to run with this combination -- set memcached.sess_persistent=0, or use another session handler (see README, Memcached)
 ran after fixing the ini

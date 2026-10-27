@@ -11,6 +11,7 @@ function memc_child(string $body): void
     file_put_contents($child, '<?php
 require ' . var_export(__DIR__ . '/loop.inc', true) . ';
 require ' . var_export(__DIR__ . '/memcached.inc', true) . ';
+require ' . var_export(__DIR__ . '/sink.inc', true) . ';
 const MEMC_SERVER = ' . var_export("$host:$port", true) . ';
 ' . $body);
     $phasync = realpath(ini_get('extension_dir') . '/phasync.so');

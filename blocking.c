@@ -1805,7 +1805,12 @@ static ZEND_NAMED_FUNCTION(phasync_pcntl_wait_override)
  * the coroutine instead of blocking the process, everywhere else it is the libc
  * call. That covers every call, TLS included, with no per-function code, and the
  * bytes on the wire, the results and the errors stay the library's own. One call
- * at a time per connection: see phasync_conn_call(). */
+ * at a time per connection: see phasync_conn_call().
+ *
+ * php-memcached and phpredis wait for a locked session in C, retrying after a
+ * usleep() (#12): their own usleep and nanosleep relocations get a cooperative
+ * sleep the same way, so the request holding the lock, often another coroutine
+ * of the same worker, can run meanwhile. */
 
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
 /* poll() as the libraries call it, inside a coroutine: the same answer, reached by
@@ -1844,6 +1849,28 @@ static int phasync_got_poll(struct pollfd *fds, nfds_t nfds, int timeout)
 		}
 	}
 	return rc;
+}
+
+/* usleep() and nanosleep() as php-memcached and phpredis call them: in a coroutine
+ * the coroutine sleeps; a cancellation ends the sleep early (EINTR), with the
+ * exception pending for the caller to propagate. */
+static int phasync_got_nanosleep(const struct timespec *req, struct timespec *rem)
+{
+	if (!phasync_reading() || EG(active_fiber) == NULL || phasync_unwinding() || phasync_from_c()) {
+		return nanosleep(req, rem);
+	}
+	if (EG(exception) || phasync_call_sleep((zend_long) req->tv_sec * 1000000 + req->tv_nsec / 1000) < 0) {
+		errno = EINTR;
+		return -1;
+	}
+	return 0;
+}
+
+static int phasync_got_usleep(useconds_t usec)
+{
+	struct timespec ts = { usec / 1000000, (long) (usec % 1000000) * 1000 };
+
+	return phasync_got_nanosleep(&ts, NULL);
 }
 
 /* getaddrinfo() as the libraries call it: a host name is resolved on the thread
@@ -1893,7 +1920,8 @@ static void phasync_got_write(void **slot, void *value, bool relro)
 	}
 }
 
-/* Point every relocation of libmemcached.so and libpq.so for poll and getaddrinfo at ours. */
+/* Point every relocation of libmemcached.so and libpq.so for poll and getaddrinfo, and of
+ * memcached.so and redis.so for usleep and nanosleep, at ours. */
 static int phasync_got_object(struct dl_phdr_info *info, size_t size, void *arg)
 {
 	const char *name = strrchr(info->dlpi_name, '/');
@@ -1904,9 +1932,13 @@ static int phasync_got_object(struct dl_phdr_info *info, size_t size, void *arg)
 	const char *strtab = NULL;
 	ElfW(Addr) relro_lo = 0, relro_hi = 0;
 
+	bool lib, ext;
+
 	name = name ? name + 1 : info->dlpi_name;
-	if (strncmp(name, "libmemcached.so", sizeof("libmemcached.so") - 1) != 0
-	 && strncmp(name, "libpq.so", sizeof("libpq.so") - 1) != 0) {
+	lib = strncmp(name, "libmemcached.so", sizeof("libmemcached.so") - 1) == 0
+	   || strncmp(name, "libpq.so", sizeof("libpq.so") - 1) == 0;
+	ext = strcmp(name, "memcached.so") == 0 || strcmp(name, "redis.so") == 0;
+	if (!lib && !ext) {
 		return 0;
 	}
 	for (int i = 0; i < info->dlpi_phnum; i++) {
@@ -1935,10 +1967,15 @@ static int phasync_got_object(struct dl_phdr_info *info, size_t size, void *arg)
 		for (size_t i = 0; rel[t] && i < relsz[t] / sizeof(ElfW(Rela)); i++) {
 			const char *sym = strtab + symtab[ELF64_R_SYM(rel[t][i].r_info)].st_name;
 			void **slot = (void **) (info->dlpi_addr + rel[t][i].r_offset);
-			void *repl = strcmp(sym, "poll") == 0 ? (void *) phasync_got_poll
+			void *repl = !lib ? NULL
+			           : strcmp(sym, "poll") == 0 ? (void *) phasync_got_poll
 			           : strcmp(sym, "getaddrinfo") == 0 ? (void *) phasync_got_getaddrinfo : NULL;
 
-			if (repl) {
+			if (ext) {
+				repl = strcmp(sym, "usleep") == 0 ? (void *) phasync_got_usleep
+				     : strcmp(sym, "nanosleep") == 0 ? (void *) phasync_got_nanosleep : NULL;
+			}
+			if (repl && phasync_got_n < (int) (sizeof(phasync_got_patched) / sizeof(phasync_got_patched[0]))) {
 				bool relro = (ElfW(Addr)) slot >= relro_lo && (ElfW(Addr)) slot < relro_hi;
 
 				phasync_got_patched[phasync_got_n].slot = slot;

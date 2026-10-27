@@ -385,9 +385,8 @@ static void phasync_wrap_existing_streams(bool include_files)
 
 /* memcached.sess_persistent shares one libmemcached handle across every
  * coroutine without the per-handle lock (that lock lives on the Memcached
- * object's methods, which the session handler bypasses), and its session
- * lock wait is a libc usleep() that blocks the whole process -- neither is
- * fixable from here (see README, Memcached). Checked at the first
+ * object's methods, which the session handler bypasses) -- not fixable from
+ * here (see README, Memcached). Checked at the first
  * Suspension::manage() of a request. */
 static bool phasync_memcached_sessions_unsafe(void)
 {

@@ -285,22 +285,20 @@ progress (`false`, with the loop's exception pending, which propagates).
 The result code and message belong to the object, so read them before the
 coroutine yields to another.
 
-Known limitations of the `memcached` session handler (it is not covered by the
-one-call rule below, and cannot be from the extension; a fix belongs in php-memcached):
+The wait for a locked session (`memcached.sess_locking`, `memcached.sess_lock_wait_*`;
+phpredis' `redis.session.locking_enabled` likewise) is a `usleep()` retry loop in the
+extension's C code. The extension points php-memcached's and phpredis' own `usleep()`
+and `nanosleep()` at a sleep of the coroutine, so the request holding the lock, often
+another coroutine of the same worker, runs meanwhile.
 
-- `memcached.sess_persistent=1` (off by default) makes the handler share one
-  persistent libmemcached handle without going through a `Memcached` method, so
-  concurrent coroutines can drive it at the same time and interleave on its
-  socket. `Suspension::manage()` refuses to run at all (a `LogicException`) while this is
-  combined with `session.save_handler=memcached`, rather than let it happen
-  silently.
-- The wait for a locked session (`memcached.sess_locking`, `memcached.sess_lock_wait_*`)
-  is a libc `usleep()` retry loop inside php-memcached; it blocks the whole worker
-  (all coroutines) until the lock is free or the retries are spent.
-
-Workarounds: `memcached.sess_persistent=0`; `memcached.sess_locking=0` if your
-application tolerates unlocked sessions; or use the files or redis session handler,
-or the session handling of your framework (Swerve's own sessions).
+One limitation of the `memcached` session handler is not covered by the one-call
+rule below, and cannot be from the extension (a fix belongs in php-memcached):
+`memcached.sess_persistent=1` (off by default) makes the handler share one
+persistent libmemcached handle without going through a `Memcached` method, so
+concurrent coroutines can drive it at the same time and interleave on its socket.
+`Suspension::manage()` refuses to run at all (a `LogicException`) while this is
+combined with `session.save_handler=memcached`, rather than let it happen silently:
+set `memcached.sess_persistent=0`, or use another session handler.
 
 ### PostgreSQL
 
