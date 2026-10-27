@@ -18,6 +18,7 @@ require __DIR__ . '/preempt.inc';
 preempt_main(__DIR__ . '/preempt_basic_jit.body.inc');
 ?>
 --EXPECT--
+bool(true)
 -- none set
 NULL
 bool(true)

@@ -11,7 +11,7 @@ preempt_main(__DIR__ . '/preempt_reentrant.body.inc');
 -- a slow closure
 int(1)
 bool(true)
--- a call suspended in a fiber
+-- managed fibers preempted in turn
 array(3) {
   [0]=>
   string(1) "a"
