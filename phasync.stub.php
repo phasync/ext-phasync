@@ -257,3 +257,17 @@ final class Uninterruptible
 
 }
 
+namespace phasync\ext\internal {
+
+/**
+ * The request's poller, which Suspension::poll() waits on: not for PHP code.
+ *
+ * @strict-properties
+ * @not-serializable
+ */
+abstract class Poller
+{
+}
+
+}
+
