@@ -1,11 +1,10 @@
 <?php
-use function phasync\ext\set_preempt_function;
 
 function spin(float $s): void { $t = microtime(true); while (microtime(true) - $t < $s); }
 
 $calls = [];
 $where = 'other';
-set_preempt_function(function () use (&$calls, &$where) {
+preempt_handler(function () use (&$calls, &$where) {
     $calls[] = $where;
     if (Fiber::getCurrent()) Fiber::suspend();
 }, 0.02);

@@ -7,7 +7,7 @@ phasync
 --FILE--
 <?php
 require __DIR__ . '/preempt.inc';
-phasync\ext\preempt_main(__DIR__ . '/preempt_in_request.body.inc');
+preempt_main(__DIR__ . '/preempt_in_request.body.inc');
 ?>
 --EXPECT--
 request: interrupted

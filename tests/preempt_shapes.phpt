@@ -1,5 +1,5 @@
 --TEST--
-set_preempt_function(): every loop shape is interrupted about every interval, between iterations, straight-line code is not (no JIT)
+Preemption: every loop shape is interrupted about every interval, between iterations, straight-line code is not (no JIT)
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -9,7 +9,7 @@ opcache.enable_cli=0
 --FILE--
 <?php
 require __DIR__ . '/preempt.inc';
-phasync\ext\preempt_main(__DIR__ . '/preempt_shapes.body.inc');
+preempt_main(__DIR__ . '/preempt_shapes.body.inc');
 ?>
 --EXPECT--
 for: interrupted, mid-iteration: 0

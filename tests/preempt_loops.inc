@@ -2,13 +2,12 @@
 // none() doubles its input until a run takes 50 ms; under JIT array_map reaches
 // ~4M elements, and input + result exceed the default 128M.
 ini_set('memory_limit', '1G');
-use function phasync\ext\set_preempt_function;
 
 // $phase is 0 exactly between iterations: the closure must never see it set.
 $phase = 0;
 $calls = 0;
 $mid = 0;
-set_preempt_function(function () use (&$phase, &$calls, &$mid) {
+preempt_handler(function () use (&$phase, &$calls, &$mid) {
     $calls++;
     if ($phase !== 0) $mid++;
 }, 0.005);
@@ -109,4 +108,4 @@ function fib(int $n): int { return $n < 2 ? $n : fib($n - 1) + fib($n - 2); }
 none('recursion', function (int $size) { fib((int) log($size, 1.6)); });
 none('array_map', function (int $size) { array_map(fn($x) => g($x), range(1, $size)); });
 none('usort', function (int $size) { $a = range($size, 1); usort($a, fn($x, $y) => g($x) <=> g($y)); });
-set_preempt_function(null);
+preempt_handler(null);

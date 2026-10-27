@@ -1,5 +1,5 @@
 --TEST--
-set_preempt_function(): loops are interrupted between iterations, code without loops is not (no JIT)
+Preemption: loops are interrupted between iterations, code without loops is not (no JIT)
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -9,7 +9,7 @@ opcache.enable_cli=0
 --FILE--
 <?php
 require __DIR__ . '/preempt.inc';
-phasync\ext\preempt_main(__DIR__ . '/preempt_loops.body.inc');
+preempt_main(__DIR__ . '/preempt_loops.body.inc');
 ?>
 --EXPECT--
 -- loops are interrupted between iterations

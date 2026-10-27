@@ -1,5 +1,5 @@
 --TEST--
-set_preempt_function(): not called while an #[Uninterruptible] function, or anything it calls, runs
+Preemption: not called while an #[Uninterruptible] function, or anything it calls, runs
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -8,7 +8,7 @@ phasync
 --FILE--
 <?php
 require __DIR__ . '/preempt.inc';
-phasync\ext\preempt_main(__DIR__ . '/preempt_uninterruptible.body.inc');
+preempt_main(__DIR__ . '/preempt_uninterruptible.body.inc');
 ?>
 --EXPECT--
 a loop in it: calls: 0

@@ -1,5 +1,4 @@
 <?php
-use function phasync\ext\set_preempt_function;
 
 function spin(float $s): void { $t = microtime(true); while (microtime(true) - $t < $s); }
 
@@ -7,7 +6,7 @@ $calls = [];
 $where = 'other';
 // Suspending where it is skipped would throw FiberError (a fiber being destroyed)
 // or leave the destructor suspended (the collector's destructor fiber, 8.4+).
-set_preempt_function(function () use (&$calls, &$where) {
+preempt_handler(function () use (&$calls, &$where) {
     $calls[] = $where;
     if (Fiber::getCurrent()) Fiber::suspend();
 }, 0.02);

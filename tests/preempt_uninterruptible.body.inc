@@ -1,5 +1,4 @@
 <?php
-use function phasync\ext\set_preempt_function;
 use phasync\Uninterruptible;
 
 function spin(float $s): void { $t = microtime(true); while (microtime(true) - $t < $s); }
@@ -17,7 +16,7 @@ class K
 }
 
 $calls = 0;
-set_preempt_function(function () use (&$calls) { $calls++; }, 0.005);
+preempt_handler(function () use (&$calls) { $calls++; }, 0.005);
 
 function measure(string $name, callable $code): void
 {
@@ -39,7 +38,7 @@ echo "-- suspended on I/O, others run and are preempted meanwhile\n";
 require __DIR__ . '/loop.inc';
 [$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
 $preempted = 0;
-set_preempt_function(function () use (&$preempted) {
+preempt_handler(function () use (&$preempted) {
     if (Fiber::getCurrent()) {
         $preempted++;
         usleep(1);          // yields to the loop
@@ -65,5 +64,5 @@ $loop->runAll(
         fwrite($b, 'data');
     },
 );
-set_preempt_function(null);
+preempt_handler(null);
 ?>

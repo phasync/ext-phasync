@@ -1,5 +1,5 @@
 --TEST--
-set_preempt_function(): every loop shape is interrupted about every interval, between iterations, straight-line code is not (tracing JIT)
+Preemption: every loop shape is interrupted about every interval, between iterations, straight-line code is not (tracing JIT)
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -20,7 +20,7 @@ opcache.jit_hot_side_exit=8
 --FILE--
 <?php
 require __DIR__ . '/preempt.inc';
-phasync\ext\preempt_main(__DIR__ . '/preempt_shapes_tracing.body.inc');
+preempt_main(__DIR__ . '/preempt_shapes_tracing.body.inc');
 ?>
 --EXPECT--
 bool(true)

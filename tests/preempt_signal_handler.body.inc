@@ -1,8 +1,7 @@
 <?php
-use function phasync\ext\set_preempt_function;
 
 $calls = 0;
-set_preempt_function(function () use (&$calls) { $calls++; }, 0.005);
+preempt_handler(function () use (&$calls) { $calls++; }, 0.005);
 
 function spin(): int
 {

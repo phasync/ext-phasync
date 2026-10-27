@@ -1,5 +1,5 @@
 --TEST--
-set_preempt_function(): skipped in the cycle collector's destructors and in a fiber being destroyed
+Preemption: skipped in the cycle collector's destructors and in a fiber being destroyed
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -7,7 +7,7 @@ phasync
 --FILE--
 <?php
 require __DIR__ . '/preempt.inc';
-phasync\ext\preempt_main(__DIR__ . '/preempt_skip.body.inc');
+preempt_main(__DIR__ . '/preempt_skip.body.inc');
 ?>
 --EXPECT--
 -- the cycle collector's destructors, in a fiber

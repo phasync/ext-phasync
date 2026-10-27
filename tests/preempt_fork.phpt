@@ -1,5 +1,5 @@
 --TEST--
-set_preempt_function(): a fork()ed child keeps the closure and has a timer of its own
+Preemption: a fork()ed child keeps the closure and has a timer of its own
 --EXTENSIONS--
 phasync
 pcntl
@@ -8,7 +8,7 @@ pcntl
 --FILE--
 <?php
 require __DIR__ . '/preempt.inc';
-phasync\ext\preempt_main(__DIR__ . '/preempt_fork.body.inc');
+preempt_main(__DIR__ . '/preempt_fork.body.inc');
 ?>
 --EXPECT--
 child: ok, threads: 1

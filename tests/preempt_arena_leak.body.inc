@@ -1,5 +1,4 @@
 <?php
-use function phasync\ext\set_preempt_function;
 
 class BindScope {}
 
@@ -16,7 +15,7 @@ $template = function () {
     while (microtime(true) - $t < 0.0003);
 };
 
-set_preempt_function(function () {}, 0.0002);
+preempt_handler(function () {}, 0.0002);
 
 function run_round(int $n, Closure $template): void
 {
@@ -35,7 +34,7 @@ run_round(9000, $template);  // over 64 KiB worth of leaked allocations, if leak
 gc_collect_cycles();
 $after = memory_get_usage();
 
-set_preempt_function(null);
+preempt_handler(null);
 
 $growth = $after - $before;
 // Without the bug: bind()/call()/unset() bookkeeping only, at most a few

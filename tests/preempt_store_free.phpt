@@ -1,5 +1,5 @@
 --TEST--
-set_preempt_function(): loops that store nothing to memory see the flag each iteration under the tracing JIT (no hoisted load)
+Preemption: loops that store nothing to memory see the flag each iteration under the tracing JIT (no hoisted load)
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -12,7 +12,7 @@ opcache.jit_buffer_size=64M
 --FILE--
 <?php
 require __DIR__ . '/preempt.inc';
-phasync\ext\preempt_main(__DIR__ . '/preempt_store_free.body.inc');
+preempt_main(__DIR__ . '/preempt_store_free.body.inc');
 ?>
 --EXPECT--
 tight: called

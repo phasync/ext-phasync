@@ -1,7 +1,7 @@
 <?php
 require __DIR__ . '/sink.inc';
 $c = new ArrayObject(['n' => 0]);
-phasync\ext\set_preempt_function(function () use ($c) { $c['n']++; }, 0.005);
+preempt_handler(function () use ($c) { $c['n']++; }, 0.005);
 $spin = function () use ($c) { $c['n'] = 0; $t = microtime(true); while (microtime(true) - $t < 0.1); return $c['n'] >= 3 ? 'interrupted' : 'calls: ' . $c['n']; };
 $f = new Fiber(function () use ($spin) {
     $o = new ArrayObject;

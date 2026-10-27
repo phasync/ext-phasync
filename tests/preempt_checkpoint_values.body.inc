@@ -1,5 +1,4 @@
 <?php
-use function phasync\ext\set_preempt_function;
 
 // php/php-src#23983's function: the closure's calls end its first loop.
 function f(&$n) {
@@ -18,11 +17,11 @@ function loop() { $y = 1; for ($i = 0; ; $i++) { $y = ($y * 31 + $i) & 0xffffff;
 
 var_dump(opcache_get_status()['jit']['on']);
 $calls = 0;
-set_preempt_function(function () use (&$calls) { $calls++; }, 0.002);
+preempt_handler(function () use (&$calls) { $calls++; }, 0.002);
 var_dump(f($calls), nested(8000000));
 
 $k = 0;
-set_preempt_function(function () use (&$k) {
+preempt_handler(function () use (&$k) {
     if (++$k === 1) debug_print_backtrace();
     throw new Exception('from the closure');
 }, 0.002);
@@ -31,7 +30,7 @@ try {
 } catch (Exception $e) {
     echo $e->getMessage(), ' at line ', $e->getLine(), "\n", $e->getTraceAsString(), "\n";
 }
-set_preempt_function(null);
+preempt_handler(null);
 // Internal: the flag is a constant; the function is in no function table on 8.4+.
 var_dump(defined('phasync\ext\__PREEMPT_DUE'), phasync\ext\__PREEMPT_DUE);
 var_dump(function_exists('phasync\ext\checkpoint') === PHP_VERSION_ID < 80400);

@@ -2,13 +2,12 @@
 // The loops call no user function: under the tracing JIT, a loop whose trace
 // links into the trace of a function it calls may have no interrupt check at its
 // head, and then is not interrupted (see README).
-use function phasync\ext\set_preempt_function;
 
 var_dump(opcache_get_status()['jit']['on']);
 $phase = 0;
 $calls = 0;
 $mid = 0;
-set_preempt_function(function () use (&$phase, &$calls, &$mid) {
+preempt_handler(function () use (&$phase, &$calls, &$mid) {
     $calls++;
     if ($phase !== 0) $mid++;
 }, 0.005);
@@ -64,5 +63,5 @@ do {
     $got = $calls;
 } while (microtime(true) - $t < 0.1);
 echo "recursion: calls: $got\n";
-set_preempt_function(null);
+preempt_handler(null);
 ?>

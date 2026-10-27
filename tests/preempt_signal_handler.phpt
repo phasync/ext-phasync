@@ -1,5 +1,5 @@
 --TEST--
-set_preempt_function(): not called in a pcntl signal handler, which the engine calls between opcodes
+Preemption: not called in a pcntl signal handler, which the engine calls between opcodes
 --EXTENSIONS--
 phasync
 pcntl
@@ -11,7 +11,7 @@ opcache.enable_cli=0
 --FILE--
 <?php
 require __DIR__ . '/preempt.inc';
-phasync\ext\preempt_main(__DIR__ . '/preempt_signal_handler.body.inc');
+preempt_main(__DIR__ . '/preempt_signal_handler.body.inc');
 ?>
 --EXPECT--
 signal handler: calls: 0

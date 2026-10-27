@@ -8,13 +8,13 @@ foreach (['tight', 'nested', 'dowhile'] as $f) {
     $expect[$f] = $f(4000000);   // traces compiled with the flag down
 }
 $calls = 0;
-phasync\ext\set_preempt_function(function () use (&$calls) { $calls++; }, 0.001);
+preempt_handler(function () use (&$calls) { $calls++; }, 0.001);
 foreach (['tight', 'nested', 'dowhile'] as $f) {
     $calls = 0;
     $y = $f(40000000);
     echo $f, ': ', $calls > 0 ? 'called' : 'never called', "\n";
 }
-phasync\ext\set_preempt_function(null);
+preempt_handler(null);
 foreach (['tight', 'nested', 'dowhile'] as $f) {
     var_dump($f(4000000) === $expect[$f]);
 }

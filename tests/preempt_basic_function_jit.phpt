@@ -1,5 +1,5 @@
 --TEST--
-set_preempt_function(): interval, removal, previous, exceptions, suspension (function JIT)
+Preemption: interval, removal, previous, exceptions, suspension (function JIT)
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -15,7 +15,7 @@ opcache.jit_buffer_size=64M
 --FILE--
 <?php
 require __DIR__ . '/preempt.inc';
-phasync\ext\preempt_main(__DIR__ . '/preempt_basic_function_jit.body.inc');
+preempt_main(__DIR__ . '/preempt_basic_function_jit.body.inc');
 ?>
 --EXPECT--
 bool(true)
@@ -59,8 +59,8 @@ bool(true)
 int(5)
 bool(true)
 -- bad interval
-phasync\ext\set_preempt_function(): Argument #2 ($minInterval) must be a positive number of seconds
-phasync\ext\set_preempt_function(): Argument #2 ($minInterval) must be a positive number of seconds
-phasync\ext\set_preempt_function(): Argument #2 ($minInterval) must be a positive number of seconds
-phasync\ext\set_preempt_function(): Argument #2 ($minInterval) must be a positive number of seconds
+preempt_handler(): Argument #2 ($minInterval) must be a positive number of seconds
+preempt_handler(): Argument #2 ($minInterval) must be a positive number of seconds
+preempt_handler(): Argument #2 ($minInterval) must be a positive number of seconds
+preempt_handler(): Argument #2 ($minInterval) must be a positive number of seconds
 NULL

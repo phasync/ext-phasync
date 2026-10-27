@@ -1,5 +1,4 @@
 <?php
-use function phasync\ext\set_preempt_function;
 
 // Every loop shape, with and without calls to a function that is hot on its
 // own (under the tracing JIT, a loop's trace then links into the function's
@@ -12,7 +11,7 @@ for ($i = 0, $y = 1; $i < 200000; $i++) { $y = hot($y); }
 $phase = 0;
 $calls = 0;
 $mid = 0;
-set_preempt_function(function () use (&$phase, &$calls, &$mid) {
+preempt_handler(function () use (&$phase, &$calls, &$mid) {
     $calls++;
     if ($phase !== 0) $mid++;
 }, 0.005);
@@ -54,4 +53,4 @@ do {
     $got = $calls;
 } while (hrtime(true) - $t < 50000000);
 echo "recursion: calls: $got\n";
-set_preempt_function(null);
+preempt_handler(null);

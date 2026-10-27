@@ -8,10 +8,9 @@
 // not necessarily the checkpoint() call itself -- so this exercises loops
 // (which carry the compiled-in checkpoints), internal calls after them, and
 // a Fiber, the way a phasync coroutine would.
-use function phasync\ext\set_preempt_function;
 
 $calls = 0;
-set_preempt_function(function () use (&$calls) { $calls++; }, 0.005);
+preempt_handler(function () use (&$calls) { $calls++; }, 0.005);
 
 function work(float $end): array
 {
@@ -34,7 +33,7 @@ $fiber = new Fiber(function () {
 $fiber->start();
 $result = $fiber->getReturn();
 
-set_preempt_function(null);
+preempt_handler(null);
 
 echo $calls >= 1 ? "preempted\n" : "not preempted (calls: $calls)\n";
 echo is_array($result) ? "result ok\n" : "result corrupted\n";

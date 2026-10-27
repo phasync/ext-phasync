@@ -1,8 +1,7 @@
 <?php
-use function phasync\ext\set_preempt_function;
 
 $calls = 0;
-set_preempt_function(function () use (&$calls) { $calls++; }, 0.005);
+preempt_handler(function () use (&$calls) { $calls++; }, 0.005);
 
 // A loop of 0.1 s; the number of calls of the closure during it.
 function spin(): int

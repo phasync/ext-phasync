@@ -1,5 +1,4 @@
 <?php
-use function phasync\ext\set_preempt_function;
 
 var_dump(opcache_get_status()["jit"]["on"]);
 
@@ -16,13 +15,13 @@ function spin(): int
 }
 
 $calls = 0;
-set_preempt_function(function () use (&$calls) { $calls++; }, 0.005);
+preempt_handler(function () use (&$calls) { $calls++; }, 0.005);
 echo "tracing: ", spin() >= 3 ? "interrupted" : "calls: $calls", "\n";
-set_preempt_function(null);
+preempt_handler(null);
 
 ini_set('opcache.jit', 'off');
 var_dump(opcache_get_status()['jit']['on']);
-set_preempt_function(function () use (&$calls) { $calls++; }, 0.005);
+preempt_handler(function () use (&$calls) { $calls++; }, 0.005);
 echo "off: ", spin() >= 3 ? "interrupted" : "calls: $calls", "\n";
-set_preempt_function(null);
+preempt_handler(null);
 ?>

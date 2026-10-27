@@ -1,5 +1,5 @@
 --TEST--
-set_preempt_function(): not called in never-list callbacks (usort, error handlers ...), nor in destructors or handlers (function JIT)
+Preemption: not called in never-list callbacks (usort, error handlers ...), nor in destructors or handlers (function JIT)
 --EXTENSIONS--
 phasync
 session
@@ -17,7 +17,7 @@ session.save_path=
 --FILE--
 <?php
 require __DIR__ . '/preempt.inc';
-phasync\ext\preempt_main(__DIR__ . '/preempt_called_from_c_function_jit.body.inc');
+preempt_main(__DIR__ . '/preempt_called_from_c_function_jit.body.inc');
 ?>
 --EXPECT--
 session read handler: interrupted
