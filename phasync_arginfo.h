@@ -89,12 +89,23 @@ static const zend_function_entry class_phasync_ext_Poller_methods[] = {
 	ZEND_FE_END
 };
 
+static zend_class_entry *phasync_register_class(zend_class_entry *ce, uint32_t flags)
+{
+#if PHP_VERSION_ID >= 80400
+	return zend_register_internal_class_with_flags(ce, NULL, flags);
+#else
+	zend_class_entry *class_entry = zend_register_internal_class_ex(ce, NULL);
+	class_entry->ce_flags |= flags;
+	return class_entry;
+#endif
+}
+
 static zend_class_entry *register_class_phasync_ext_Poller(void)
 {
 	zend_class_entry ce, *class_entry;
 
 	INIT_NS_CLASS_ENTRY(ce, "phasync\\ext", "Poller", class_phasync_ext_Poller_methods);
-	class_entry = zend_register_internal_class_with_flags(&ce, NULL, ZEND_ACC_FINAL|ZEND_ACC_NO_DYNAMIC_PROPERTIES|ZEND_ACC_NOT_SERIALIZABLE);
+	class_entry = phasync_register_class(&ce, ZEND_ACC_FINAL|ZEND_ACC_NO_DYNAMIC_PROPERTIES|ZEND_ACC_NOT_SERIALIZABLE);
 
 	return class_entry;
 }
@@ -104,7 +115,7 @@ static zend_class_entry *register_class_phasync_Uninterruptible(void)
 	zend_class_entry ce, *class_entry;
 
 	INIT_NS_CLASS_ENTRY(ce, "phasync", "Uninterruptible", NULL);
-	class_entry = zend_register_internal_class_with_flags(&ce, NULL, ZEND_ACC_FINAL|ZEND_ACC_NO_DYNAMIC_PROPERTIES);
+	class_entry = phasync_register_class(&ce, ZEND_ACC_FINAL|ZEND_ACC_NO_DYNAMIC_PROPERTIES);
 
 	zend_string *attribute_name_Attribute_class_phasync_Uninterruptible_0 = zend_string_init_interned("Attribute", sizeof("Attribute") - 1, 1);
 	zend_attribute *attribute_Attribute_class_phasync_Uninterruptible_0 = zend_add_class_attribute(class_entry, attribute_name_Attribute_class_phasync_Uninterruptible_0, 1);
