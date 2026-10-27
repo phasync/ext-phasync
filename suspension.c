@@ -59,7 +59,9 @@ static zend_fiber *phasync_managed_top(void)
 {
 	zend_fiber *f = EG(active_fiber);
 
-	if (f == NULL || zend_fiber_switch_blocked()) {
+	/* PHP 8.3 blocks switching while a fiber is destroyed too: a wait in its finally
+	 * blocks must still come here, to fail as Fiber::suspend() does there. */
+	if (f == NULL || (zend_fiber_switch_blocked() && !(f->flags & ZEND_FIBER_FLAG_DESTROYED))) {
 		return NULL;
 	}
 	while (!(f->flags & PHASYNC_FIBER_MANAGED)) {
@@ -532,8 +534,8 @@ ZEND_METHOD(phasync_ext_Suspension, manage)
 		if (phasync_memcached_sessions_unsafe()) {
 			zend_throw_exception(spl_ce_LogicException, "memcached.sess_persistent=1 with "
 				"session.save_handler=memcached shares a persistent connection between "
-				"fibers without the per-handle lock, and its session lock wait blocks "
-				"the process; Suspension::manage() refuses to run with this combination -- set "
+				"fibers without the per-handle lock; Suspension::manage() refuses to run "
+				"with this combination -- set "
 				"memcached.sess_persistent=0, or use another session handler (see README, "
 				"Memcached)", 0);
 			RETURN_THROWS();

@@ -33,9 +33,6 @@ function roundtrip(string $path): string {
 echo "outside: " . roundtrip($path) . "\n";
 @unlink($path);
 
-// Inside a manage() scope.
-echo "inside: " . (new Loop)->manage(fn() => roundtrip($path)) . "\n";
-@unlink($path);
 $got = null;
 (new Loop)->runAll(function () use ($path, &$got) { $got = roundtrip($path); });
 @unlink($path);
@@ -44,5 +41,4 @@ echo "in a coroutine: $got\n";
 ?>
 --EXPECT--
 outside: ping
-inside: ping
 in a coroutine: ping

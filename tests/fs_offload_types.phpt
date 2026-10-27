@@ -49,7 +49,7 @@ foreach (["other, $type", 'nfs', '', "$type,"] as $types) {
     $loop->runAll(function () use ($work, &$out) { $out = $work(); });
     printf("%-10s %s\n", str_replace((string) $type, 'TYPE', $types) === '' ? "''" : str_replace((string) $type, 'TYPE', $types), $out);
 }
-$out = $loop->manage($work);
+$out = $work();
 echo "no coroutine: $out\n";
 foreach (['f', 'g'] as $e) unlink("$dir/$e");
 rmdir($dir);

@@ -60,7 +60,7 @@ $in = null;
 $loop->runAll(function () use ($work, &$in) { $in = $work(); });
 echo 'coroutine: ', $in === $native ? 'same as native' : 'DIFFERENT', ', ', $loop->parks > $before ? 'pooled' : 'inline', "\n";
 $before = $loop->parks;
-$out = $loop->manage($work);
+$out = $work();
 echo 'no coroutine: ', $out === $native ? 'same as native' : 'DIFFERENT', ', ', $loop->parks > $before ? 'pooled' : 'inline', "\n";
 var_dump($native[0], $native[1], $native[3], $native[4], $native[5], $native[8], $native[9], $native[10], $native[12], $native[15]);
 unlink($path);

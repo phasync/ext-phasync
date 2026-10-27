@@ -12,18 +12,16 @@ $peer   = stream_socket_accept($server);
 echo stream_get_meta_data($client)['stream_type'], "\n";
 $loop = new Loop;
 $log  = [];
-$loop->manage(function () use ($loop, $client, $peer, &$log) {
-    $loop->go(function ($conn) use ($loop, &$log) {
-        $loop->poller->readable($conn, 5);
-        $log[] = 'readable';
-    }, $client);
-    $loop->go(function () use ($peer, &$log) {
-        $log[] = 'other coroutine runs';
-        usleep(100000);
-        fwrite($peer, 'x');
-    });
-    $loop->run();
+$loop->go(function ($conn) use ($loop, &$log) {
+    $loop->poller->readable($conn, 5);
+    $log[] = 'readable';
+}, $client);
+$loop->go(function () use ($peer, &$log) {
+    $log[] = 'other coroutine runs';
+    usleep(100000);
+    fwrite($peer, 'x');
 });
+$loop->run();
 echo implode("\n", $log), "\n";
 ?>
 --EXPECT--

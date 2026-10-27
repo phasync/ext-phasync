@@ -43,7 +43,7 @@ foreach (["refcount", "gc"] as $how) {
         $r = $db->query("SELECT SLEEP(2)");
         echo "  query: ", json_encode($r), "\n";
     }]);
-    (new Loop)->manage(fn() => null);
+    phasync\ext\Suspension::poll([], 0);       // where nobody is inside an op: the held closer goes
     gc_collect_cycles();
     $db2 = new mysqli($host, $user, $pass, "", $port);
     echo "  new connection: ", $db2->query("SELECT 1")->fetch_row()[0], "\n";

@@ -177,12 +177,6 @@ final class Loop
         }
     }
 
-    /** Kept for the tests' shape: the hooks follow the managed fibers, so this just runs $task. */
-    public function manage(Closure $task): mixed
-    {
-        return $task();
-    }
-
     /** Run the coroutines until all are done. */
     public function runAll(Closure|Fiber ...$coroutines): void
     {

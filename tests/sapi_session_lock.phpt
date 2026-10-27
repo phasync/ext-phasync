@@ -1,5 +1,5 @@
 --TEST--
-sapi() inside manage(): two concurrent requests on the same session id take turns on its flock without blocking the worker, as under php-fpm
+sapi(): two concurrent requests on the same session id take turns on its flock without blocking the worker, as under php-fpm
 --EXTENSIONS--
 phasync
 session
@@ -48,7 +48,7 @@ $loop->go(function () use ($loop, &$log, &$done) {
 $loop->go(function () use ($loop, &$ticks, &$done) {
     while ($done < 2) { usleep(10000); $ticks++; }
 });
-$loop->manage(fn() => $loop->run());
+$loop->run();
 echo implode("\n", $log), "\n";
 echo $ticks >= 10 ? "the worker kept running\n" : "BLOCKED (ticks=$ticks)\n";
 
@@ -72,7 +72,7 @@ $loop->go(function () use ($loop, &$log2) {
         $log2[] = 'B has its own session, not waiting for A';
     }, new Sink);
 });
-$loop->manage(fn() => $loop->run());
+$loop->run();
 echo implode("\n", $log2), "\n";
 
 array_map('unlink', glob("$dir/sess_*"));

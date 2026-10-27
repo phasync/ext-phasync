@@ -66,7 +66,7 @@ $loop->runAll(function () use ($loop, $path, $data, $drop) {
 // Outside a coroutine a cold read is native.
 $drop();
 $p = $loop->parks;
-$got = $loop->manage(fn () => file_get_contents($path));
+$got = file_get_contents($path);
 echo 'no coroutine, cold: ', $got === $data ? 'ok' : 'WRONG', ', ', $loop->parks > $p ? 'pooled' : 'inline', "\n";
 unlink($path);
 ?>

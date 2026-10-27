@@ -52,7 +52,7 @@ foreach (['network', 'all', 'none'] as $policy) {
     $loop->runAll(function () use ($work, &$in) { $in = $work(); });
     printf("%-8s coroutine %s, %s\n", $policy, $in === array_fill(0, 6, true) ? 'correct' : 'WRONG', $loop->parks > $before ? 'pooled' : 'inline');
     $before = $loop->parks;
-    $out = $loop->manage($work);
+    $out = $work();
     printf("%-8s no coroutine %s, %s\n", $policy, $out === array_fill(0, 6, true) ? 'correct' : 'WRONG', $loop->parks > $before ? 'pooled' : 'inline');
 }
 

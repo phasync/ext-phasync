@@ -60,7 +60,7 @@ var_dump($res, $loop->parks === $before);
 
 // Outside a fiber: native, not pooled.
 $before = $loop->parks;
-$loop->manage(fn() => file_get_contents("$dir/src"));
+file_get_contents("$dir/src");
 var_dump($loop->parks === $before);
 
 foreach (scandir($dir) as $e) if ($e[0] !== '.') unlink("$dir/$e");

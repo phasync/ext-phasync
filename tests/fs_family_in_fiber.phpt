@@ -104,7 +104,7 @@ check('disk_free_space',        fn() => disk_free_space('.') > 0 && disk_total_s
 
 // Outside a fiber everything is native (and not pooled).
 $before = $loop->parks;
-$loop->manage(fn() => file_exists(__FILE__));
+file_exists(__FILE__);
 var_dump($loop->parks === $before);
 
 // The default policy (network) leaves a local path alone.
