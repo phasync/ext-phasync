@@ -25,12 +25,13 @@ $loop->runAll(
     },
 );
 echo implode("\n", $log), "\n";
-var_dump(round($loop->parkTimeouts[0], 2));          // float(5): accept's own timeout
 
 // 2. Timeout: native warning and false; timeout 0 means don't wait (native).
 $loop = new Loop;
 $loop->runAll(function () use ($srv) {
+    $t = microtime(true);
     var_dump(stream_socket_accept($srv, 0.1));
+    var_dump(round(microtime(true) - $t, 1));      // float(0.1): accept's own timeout
     var_dump(stream_socket_accept($srv, 0));
 });
 var_dump($loop->parks);                             // int(1): only the 0.1 s one waited
@@ -38,10 +39,10 @@ var_dump($loop->parks);                             // int(1): only the 0.1 s on
 --EXPECTF--
 B connects
 A accepted: yes, peer is set
-float(5)
 
 Warning: stream_socket_accept(): Accept failed: %s timed out in %s on line %d
 bool(false)
+float(0.1)
 
 Warning: stream_socket_accept(): Accept failed: %s timed out in %s on line %d
 bool(false)

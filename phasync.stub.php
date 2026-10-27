@@ -41,7 +41,9 @@ final class Suspension extends \Exception
     /**
      * Wait up to $seconds (0: don't wait; negative: no limit) until at least one of
      * $suspensions is ready, and return the ready ones with their keys. A wait that
-     * timed out (a socket's native timeout, a sleep) counts as ready. Called in a
+     * timed out (a socket's native timeout, a sleep) counts as ready. With none
+     * given it just waits (a loop sleeping until its next timer). A signal ends the
+     * wait early, after its handler has run, as stream_select() does. Called in a
      * managed fiber, it is a blocking call like any other: it suspends that fiber
      * with a Suspension that is ready when one of these is, so a loop can run inside
      * another loop's fiber.

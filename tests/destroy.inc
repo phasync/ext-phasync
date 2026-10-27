@@ -7,50 +7,47 @@
 require_once __DIR__ . '/loop.inc';
 
 /**
- * Under $loop's manage() scope, start $op in a coroutine and, once it is
- * suspended, destroy it by $how ('refcount' or 'gc'); then run the loop, with
+ * Start $op in a coroutine of $loop and, once it is suspended, destroy it by
+ * $how ('refcount' or 'gc'): the loop and the test drop it and its Suspension. Then
+ * run the loop, with
  * the coroutines $after. Coroutines in $before start (up to their first
  * suspension) before $op, those in $alongside after it, before it is destroyed.
  * Prints what happened to the destroyed one.
  */
 function destroy_while_waiting(Loop $loop, string $how, Closure $op, array $after = [], array $before = [], array $alongside = []): void
 {
-    $loop->manage(function () use ($loop, $how, $op, $after, $before, $alongside) {
-        $others = [];
-        foreach ($before as $c) {
-            ($others[] = new Fiber($c))->start();
+    foreach ($before as $c) {
+        $loop->start($c);
+    }
+    $holder = new stdClass;
+    $fiber = $loop->start(function () use ($op, $holder) {
+        try {
+            $r = $op();
+            echo "  returned ", json_encode($r), " (not destroyed)\n";
+        } finally {
+            echo "  finally ran\n";
         }
-        $holder = new stdClass;
-        $fiber = new Fiber(function () use ($op, $holder) {
-            try {
-                $r = $op();
-                echo "  returned ", json_encode($r), " (not destroyed)\n";
-            } finally {
-                echo "  finally ran\n";
-            }
-        });
-        if ($how === 'gc') {
-            $holder->fiber = $fiber;        // a cycle through the fiber's own frame
-        }
-        $fiber->start();
-        if (!$fiber->isSuspended()) {
-            echo "  not suspended\n";
-        }
-        foreach ($alongside as $c) {
-            ($others[] = new Fiber($c))->start();
-        }
-        $loop->drop($fiber);
-        $weak = WeakReference::create($fiber);
-        unset($fiber, $holder);
-        if ($how === 'gc') {
-            collect_aged();
-            echo "  collected: ", $weak->get() === null ? 'yes' : 'no', "\n";
-        }
-        foreach ($after as $c) {
-            $loop->go($c);
-        }
-        $loop->run();
     });
+    if ($how === 'gc') {
+        $holder->fiber = $fiber;        // a cycle through the fiber's own frame
+    }
+    if (!$fiber->isSuspended()) {
+        echo "  not suspended\n";
+    }
+    foreach ($alongside as $c) {
+        $loop->start($c);
+    }
+    $loop->drop($fiber);                // the loop lets go of it and its Suspension
+    $weak = WeakReference::create($fiber);
+    unset($fiber, $holder);
+    if ($how === 'gc') {
+        collect_aged();
+        echo "  collected: ", $weak->get() === null ? 'yes' : 'no', "\n";
+    }
+    foreach ($after as $c) {
+        $loop->go($c);
+    }
+    $loop->run();
 }
 
 function collect_aged(): int {

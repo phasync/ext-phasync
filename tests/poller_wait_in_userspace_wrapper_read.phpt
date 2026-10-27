@@ -38,7 +38,7 @@ $loop->runAll(
         $log[] = 'read: ' . fread($f, 100);
     },
     function () use ($loop, $b, &$log) {
-        $loop->sleep(100000);
+        usleep(100000);
         $log[] = 'writing';
         fwrite($b, 'hello');
     }

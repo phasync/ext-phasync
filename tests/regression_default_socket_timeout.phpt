@@ -1,5 +1,5 @@
 --TEST--
-Regression: default_socket_timeout applies inside manage() exactly where native PHP applies it (socket streams), stream_set_timeout() overrides it, and pipes still wait without one
+Regression: default_socket_timeout applies in a coroutine exactly where native PHP applies it (socket streams), stream_set_timeout() overrides it, and pipes still wait without one
 --EXTENSIONS--
 phasync
 --INI--
@@ -11,7 +11,7 @@ if (!class_exists('Fiber')) die('skip requires Fibers');
 --FILE--
 <?php
 // PHP gives every socket stream it opens FG(default_socket_timeout) as its read timeout;
-// files and pipes get none. The extension must hand park() the same timeout, so a read
+// files and pipes get none. A read
 // that times out natively times out the same way in a coroutine, and nothing else does.
 require __DIR__ . '/loop.inc';
 
@@ -24,18 +24,14 @@ function both(string $label, float $seconds, Closure $open): void {
         $read = null;
         $run  = function () use ($stream, &$read) { $read = fread($stream, 10); };
         if ($inLoop) {
-            $loop = new Loop;
-            $loop->runAll($run);
-            $given = $loop->parkTimeouts[0] ?? null;
+            (new Loop)->runAll($run);
         } else {
             $run();
-            $given = '-';
         }
         $took = microtime(true) - $t;
-        printf("%s, %s: %s, timed_out=%s, %s, park timeout %s\n", $label, $how,
+        printf("%s, %s: %s, timed_out=%s, %s\n", $label, $how,
             var_export($read, true), var_export(stream_get_meta_data($stream)['timed_out'], true),
-            $took >= $seconds - 0.05 && $took < $seconds + 0.5 ? "after $seconds s" : sprintf('after %.2f s (expected %s)', $took, $seconds),
-            is_float($given) ? sprintf('%.1f', $given) : var_export($given, true));
+            $took >= $seconds - 0.05 && $took < $seconds + 0.5 ? "after $seconds s" : sprintf('after %.2f s (expected %s)', $took, $seconds));
         $cleanup();
     }
 }
@@ -75,13 +71,13 @@ both('pipe', 1.5, function () {
 });
 ?>
 --EXPECTF--
-stream_socket_client, native: false, timed_out=true, after 1 s, park timeout '-'
-stream_socket_client, coroutine: false, timed_out=true, after 1 s, park timeout 1.0
-fsockopen, native: false, timed_out=true, after 1 s, park timeout '-'
-fsockopen, coroutine: false, timed_out=true, after 1 s, park timeout 1.0
-accepted, native: false, timed_out=true, after 1 s, park timeout '-'
-accepted, coroutine: false, timed_out=true, after 1 s, park timeout 1.0
-stream_set_timeout(0.3), native: false, timed_out=true, after 0.3 s, park timeout '-'
-stream_set_timeout(0.3), coroutine: false, timed_out=true, after 0.3 s, park timeout 0.3
-pipe, native: 'late', timed_out=false, after 1.5 s, park timeout '-'
-pipe, coroutine: 'late', timed_out=false, after 1.5 s, park timeout NULL
+stream_socket_client, native: false, timed_out=true, after 1 s
+stream_socket_client, coroutine: false, timed_out=true, after 1 s
+fsockopen, native: false, timed_out=true, after 1 s
+fsockopen, coroutine: false, timed_out=true, after 1 s
+accepted, native: false, timed_out=true, after 1 s
+accepted, coroutine: false, timed_out=true, after 1 s
+stream_set_timeout(0.3), native: false, timed_out=true, after 0.3 s
+stream_set_timeout(0.3), coroutine: false, timed_out=true, after 0.3 s
+pipe, native: 'late', timed_out=false, after 1.5 s
+pipe, coroutine: 'late', timed_out=false, after 1.5 s

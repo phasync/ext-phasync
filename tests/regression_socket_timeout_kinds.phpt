@@ -1,5 +1,5 @@
 --TEST--
-Regression: every socket kind passes its stream_set_timeout() to park() (tcp client/accepted, unix, udp, socketpair)
+Regression: every socket kind times out after its stream_set_timeout() (tcp client/accepted, unix, udp, socketpair)
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -11,19 +11,19 @@ if (!defined('STREAM_PF_UNIX')) die('skip requires unix sockets');
 <?php
 // alpha7 handed tcp sockets a null timeout: ext/openssl registers itself for
 // tcp://, so TCP streams don't use xp_socket's ops and weren't recognised as
-// sockets. The loop times the wait out after the timeout park() is given, so
-// each case must match native: partial line, timed_out.
+// sockets. Each case must time out after the
+// socket's timeout, as native does: partial line, timed_out.
 require __DIR__ . '/loop.inc';
 
 function probe(string $label, $reader, $writer): void {
     stream_set_timeout($reader, 0, 200000);
     fwrite($writer, 'partial');
-    $loop = new Loop;
-    $loop->runAll(function () use ($label, $reader, $loop) {
+    (new Loop)->runAll(function () use ($label, $reader) {
+        $t = microtime(true);
         $line = fgets($reader);
-        $seen = $loop->parkTimeouts[0] ?? null;
+        $seen = microtime(true) - $t;
         printf("%s: timeout=%s line=%s timed_out=%s\n", $label,
-            $seen !== null && abs($seen - 0.2) < 0.01 ? '0.2' : var_export($seen, true),
+            $seen > 0.15 && $seen < 1 ? '0.2' : var_export($seen, true),
             var_export($line, true), var_export(stream_get_meta_data($reader)['timed_out'], true));
     });
 }

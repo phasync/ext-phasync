@@ -97,9 +97,9 @@ switch ($ctx) {
         require __DIR__ . '/loop.inc';
         $loop = new Loop;
         $loop->runAll(
-            function () use ($loop) { $loop->sleep(200000); echo "never\n"; },
+            function () use ($loop) { usleep(200000); echo "never\n"; },
             function () use ($loop) { [$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0); Holder::$held[] = $GLOBALS['wake'] = $b; $loop->poller->readable($a); echo "never\n"; },
-            function () use ($loop) { $loop->sleep(1000); act($GLOBALS['mode']); fwrite($GLOBALS['wake'], 'x'); },
+            function () use ($loop) { usleep(1000); act($GLOBALS['mode']); fwrite($GLOBALS['wake'], 'x'); },
         );
         break;
 }

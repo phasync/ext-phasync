@@ -21,7 +21,7 @@ foreach (['refcount', 'gc'] as $how) {
 
     // The closer, dropped while it waits, can't be destroyed there: the extension
     // holds it until the reader has left (its read fails), and lets PHP have it
-    // where no coroutine is inside an op (here: the next manage()). Its close
+    // where no coroutine is inside an op (here: the next poll()). Its close
     // then ends as it unwinds. (gc: the cycle collector didn't take it while held.)
     echo "closer destroyed while another reads ($how)\n";
     [$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
@@ -29,8 +29,8 @@ foreach (['refcount', 'gc'] as $how) {
         $r = fread($a, 100);
         echo "  reader: ", json_encode($r), "\n";
     }]);
-    echo "  next manage()\n";
-    (new Loop)->manage(fn() => null);
+    echo "  next poll()\n";
+    phasync\ext\Suspension::poll([], 0);
     gc_collect_cycles();                      // (in a cycle, it is garbage from here)
     echo "  stream: ", get_resource_type($a), "\n";
     fclose($b);
@@ -58,7 +58,7 @@ reader destroyed while another closes (refcount)
   closer: true, Unknown
 closer destroyed while another reads (refcount)
   reader: false
-  next manage()
+  next poll()
   finally ran
   stream: Unknown
 fclose() while unwinding, another reading (refcount)
@@ -74,7 +74,7 @@ reader destroyed while another closes (gc)
 closer destroyed while another reads (gc)
   collected: no
   reader: false
-  next manage()
+  next poll()
   finally ran
   stream: Unknown
 fclose() while unwinding, another reading (gc)

@@ -1,5 +1,5 @@
 --TEST--
-Poller: slots, registrations without a busy loop, the loop's timeouts pass through, close wakes waiters, cancelled pool tasks are safe, usable without manage(), fork guard, collectable
+Poll contract: waits per direction without a busy loop, the loop's timeouts pass through, close wakes waiters, cancelled pool tasks are safe, native outside a coroutine, after fork(), and when the loop is freed
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -100,40 +100,39 @@ $loop->runAll(fn() => print('spinning loop, pool read: ' . strlen(file_get_conte
 echo 'parked on the pool: ', $loop->parks > 0 ? 'yes' : 'no', "\n";
 ini_restore('phasync.fs_offload');
 
-// Without manage(): a loop can use a Poller on its own (no functions hooked).
+// Two coroutines on each end of one pair: each waits for its own direction.
 $loop = new Loop;
-$f = $loop->go(function () use ($a, $loop) { $loop->poller->readable($a); echo 'no manage(): ', fread($a, 10), "\n"; });
+$loop->go(function () use ($a, $loop) { $loop->poller->readable($a); echo 'both ends: ', fread($a, 10), "\n"; });
 $loop->go(function () use ($b, $loop) { $loop->poller->writable($b); fwrite($b, 'plain'); });
 $loop->run();
 
-// readable() needs a coroutine.
-try { (new Loop)->poller->readable($a); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+// Outside a coroutine readable() blocks natively, for at most its timeout.
+$t = microtime(true);
+var_dump(phasync\ext\Suspension::readable($a, 0.05), microtime(true) - $t >= 0.04);
 
-// A Poller freed while a stream it knew is still open: closing the stream later is safe.
+// A loop freed while a stream it waited on is still open: closing the stream later is safe.
 $loop = new Loop;
 [$e1, $e2] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
 fwrite($e2, 'y');
 $loop->runAll(function () use ($e1, $loop) { $loop->poller->readable($e1); });
 unset($loop);
-gc_collect_cycles();                                     // the loop <-> Poller closures cycle goes
+gc_collect_cycles();
 fclose($e1); fclose($e2);
-echo "freed Poller: ok\n";
+echo "freed loop: ok\n";
 
-// fork(): the child must make its own Poller.
+// fork(): the child waits through a poller of its own; the parent's still works.
 if (function_exists('pcntl_fork')) {
     $loop = new Loop;
     if (($pid = pcntl_fork()) === 0) {
-        try { $loop->poller->poll(0); } catch (Error $e) { echo 'child: ', $e->getMessage(), "\n"; }
-        $child = new Loop;
-        $child->poller->poll(0);
-        echo "child: new Poller works\n";
+        fwrite($b, 'c');
+        $loop->runAll(function () use ($a, $loop) { $loop->poller->readable($a); echo 'child: ', fread($a, 1), "\n"; });
         exit;
     }
     pcntl_waitpid($pid, $st);
-    $loop->poller->poll(0);
-    echo "parent: still works\n";
+    fwrite($b, 'p');
+    $loop->runAll(function () use ($a, $loop) { $loop->poller->readable($a); echo 'parent: ', fread($a, 1), "\n"; });
 } else {
-    echo "child: This Poller belongs to another process; create a new one after fork()\nchild: new Poller works\nparent: still works\n";
+    echo "child: c\nparent: p\n";
 }
 ?>
 --EXPECT--
@@ -151,9 +150,9 @@ pool task: cancelled
 loop still fine: 127.0.0.1
 spinning loop, pool read: 5 bytes
 parked on the pool: yes
-no manage(): plain
-Poller::readable() must be called in a coroutine
-freed Poller: ok
-child: This Poller belongs to another process; create a new one after fork()
-child: new Poller works
-parent: still works
+both ends: plain
+bool(false)
+bool(true)
+freed loop: ok
+child: c
+parent: p

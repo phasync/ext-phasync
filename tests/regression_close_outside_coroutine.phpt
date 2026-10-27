@@ -13,12 +13,9 @@ if (!class_exists('Fiber')) die('skip requires Fibers');
 require __DIR__ . '/loop.inc';
 [$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
 $loop = new Loop;
-$loop->manage(function () use ($a) {
-    $reader = new Fiber(function () use ($a) { fread($a, 100); echo "not reached\n"; });
-    $reader->start();
-    echo "reader suspended\n";
-    fclose($a);
-});
+$loop->start(function () use ($a) { fread($a, 100); echo "not reached\n"; });
+echo "reader suspended\n";
+fclose($a);
 ?>
 --EXPECTF--
 reader suspended

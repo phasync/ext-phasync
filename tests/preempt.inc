@@ -33,7 +33,7 @@ function preempt_main(string $file): void
             return;
         } catch (Suspension $s) {
             if (!$s->isReady()) {
-                Suspension::poll([$s], -1);
+                while (!Suspension::poll([$s], -1));   // a signal ends a wait early
                 $resume = fn() => $s->resume();
                 continue;
             }

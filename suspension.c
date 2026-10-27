@@ -434,7 +434,7 @@ static int phasync_poller_pump(phasync_poller *p, double max_time)
 	if (wake != wake_stack) {
 		efree(wake);
 	}
-	return rc < 0 ? -1 : 0;
+	return rc;   /* 1: a signal ended the wait (its handler has run) */
 }
 
 ZEND_METHOD(phasync_ext_Suspension, poll)
@@ -460,15 +460,12 @@ ZEND_METHOD(phasync_ext_Suspension, poll)
 
 	array_init(return_value);
 	phasync_orphans_release();
-	if (zend_hash_num_elements(ht) == 0 || EG(exception)) {
+	phasync_holds_release();   /* closers kept alive while others were inside an op on their stream */
+	if (EG(exception)) {
 		return;
 	}
 	if ((p = phasync_proc_poller()) == NULL) {
 		zend_throw_error(NULL, "Unable to create the epoll set: %s", strerror(errno));
-		RETURN_THROWS();
-	}
-	phasync_holds_release();
-	if (EG(exception)) {
 		RETURN_THROWS();
 	}
 	/* Take what the kernel has ready first, without waiting, even when some of these are
@@ -498,8 +495,14 @@ ZEND_METHOD(phasync_ext_Suspension, poll)
 			if (rc == PHASYNC_WAIT_ERROR) {
 				RETURN_THROWS();
 			}
-		} else if (phasync_poller_pump(p, isinf(next) ? 1e12 : next - now) < 0) {
-			RETURN_THROWS();
+		} else {
+			int rc = phasync_poller_pump(p, isinf(next) ? 1e12 : next - now);
+			if (rc < 0) {
+				RETURN_THROWS();
+			}
+			if (rc > 0) {
+				break;   /* a signal: return to the loop, as stream_select() does */
+			}
 		}
 		now = phasync_now();
 		next = end;

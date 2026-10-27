@@ -1,5 +1,5 @@
 --TEST--
-Timeout contract: park() gets the native timeout (remaining time on retries, none = forever); the loop timing it out finishes the op the native way
+Timeout contract: a wait in a coroutine ends at the native timeout (none = forever) and finishes the op the native way
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -13,35 +13,32 @@ require __DIR__ . '/loop.inc';
 [$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
 stream_set_timeout($a, 0, 300000);
 
-// 1. park() gets the stream's own timeout. A spurious wake-up (park() returns
-//    without data) is retried with only the REMAINING time. When the time runs
-//    out, the loop's timeout ends the wait: fgets() returns the partial line,
+// 1. A wait ends at the stream's own timeout: fgets() returns the partial line,
 //    timed_out is set, and no exception escapes.
 fwrite($b, 'partial');
-$loop = new Loop;
-$n = 0;
-$loop->onPark = function () use (&$n) { return ++$n === 1; };  // the first wake is spurious
-$loop->runAll(function () use ($a) {
+$t = microtime(true);
+(new Loop)->runAll(function () use ($a) {
     var_dump(fgets($a));                               // string(7) "partial"
     var_dump(stream_get_meta_data($a)['timed_out']);   // bool(true)
 });
-var_dump($loop->parkTimeouts[0]);                       // float(0.3)
-var_dump($loop->parkTimeouts[1] < 0.3 && $loop->parkTimeouts[1] > 0.2); // remaining time
+var_dump(round(microtime(true) - $t, 1));               // float(0.3)
 
 // 2. A new call starts a fresh, full timeout; fread() on an empty stream that
 //    times out returns false.
-$loop = new Loop;
-$loop->runAll(function () use ($a) {
+$t = microtime(true);
+(new Loop)->runAll(function () use ($a) {
     var_dump(fread($a, 100));                          // bool(false)
     var_dump(stream_get_meta_data($a)['timed_out']);   // bool(true)
 });
-var_dump($loop->parkTimeouts[0]);                       // float(0.3)
+var_dump(round(microtime(true) - $t, 1));               // float(0.3)
 
-// 3. Where native PHP would wait forever (a pipe), park() gets no timeout.
+// 3. Where native PHP would wait forever (a pipe), the wait has no timeout: it
+//    ends at the child's exit.
+ini_set('default_socket_timeout', '0');
 $p = proc_open([PHP_BINARY, '-n', '-r', 'usleep(300000);'], [1 => ['pipe', 'w']], $pipes);
-$loop = new Loop;
-$loop->runAll(fn() => fread($pipes[1], 10));
-var_dump($loop->parkTimeouts[0]);                       // NULL
+$t = microtime(true);
+(new Loop)->runAll(fn() => var_dump(fread($pipes[1], 10)));  // string(0) ""
+var_dump(microtime(true) - $t > 0.2);
 fclose($pipes[1]); proc_close($p);
 
 // 4. A timed-out write behaves like native: the "Send of N bytes failed" notice,
@@ -63,11 +60,11 @@ fclose($a); fclose($b); fclose($c); fclose($d);
 string(7) "partial"
 bool(true)
 float(0.3)
-bool(true)
 bool(false)
 bool(true)
 float(0.3)
-NULL
+string(0) ""
+bool(true)
 
 %s: fwrite(): Send of 1 bytes failed with errno=%d Resource temporarily unavailable in %s on line %d
 bool(false)

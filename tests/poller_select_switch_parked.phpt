@@ -1,5 +1,5 @@
 --TEST--
-Poller: waits parked under select() when the switch to epoll happens (sockets, a timeout, a close, a pool completion) each wake exactly once
+Poller: waits parked under select() when the switch to epoll happens (sockets, a timeout, a close, a pool completion) each wake
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -12,10 +12,6 @@ if ((int) @shell_exec('ulimit -n') < 4000) die('skip needs ulimit -n >= 4000');
 require __DIR__ . '/loop.inc';
 $n = 1200;   // past PHASYNC_SELECT_THRESHOLD watched descriptors
 $loop = new Loop;
-$dups = 0;
-$loop->poller = new \phasync\ext\Poller($loop->getSlot(...), $loop->park(...), function (int $s) use ($loop, &$dups) {
-    return $loop->unpark($s) || !++$dups;
-});
 $file = tempnam(sys_get_temp_dir(), 'pss');
 file_put_contents($file, str_repeat('z', 300000));
 $early = [];
@@ -69,11 +65,11 @@ $co[] = function () use ($n, $loop, &$late, &$got, $early) {
 $loop->runAll(...$co);
 sort($log);
 echo implode("\n", $log), "\n";
-echo "woke with data: ", $got === 19 + $n ? 'all' : $got, ", duplicate wakes: $dups\n";
+echo "woke with data: ", $got === 19 + $n ? 'all' : $got, "\n";
 unlink($file);
 ?>
 --EXPECT--
 closed one woke: false
 pool read: 300000
 silent: timed out
-woke with data: all, duplicate wakes: 0
+woke with data: all

@@ -1,5 +1,5 @@
 --TEST--
-Regression: tls:// streams pass their stream_set_timeout() to park() and time out like native
+Regression: tls:// streams wait for their stream_set_timeout() and time out like native
 --EXTENSIONS--
 phasync
 --SKIPIF--
@@ -35,16 +35,15 @@ $ctx = stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_nam
 $cli = stream_socket_client("tls://127.0.0.1:$port", $e, $es, 5, STREAM_CLIENT_CONNECT, $ctx);
 stream_set_timeout($cli, 0, 200000);
 
-$loop = new Loop;
-$loop->runAll(function () use ($cli) {
+$t = microtime(true);
+(new Loop)->runAll(function () use ($cli, &$t, &$seen) {
     var_dump(fgets($cli));                               // string(7) "partial"
     var_dump(stream_get_meta_data($cli)['timed_out']);   // bool(true)
+    $seen = microtime(true) - $t;
     var_dump(fread($cli, 10));                           // bool(false)
     var_dump(stream_get_meta_data($cli)['timed_out']);   // bool(true)
 });
-$seen = $loop->parkTimeouts[0] ?? null;
-
-var_dump(is_float($seen) && $seen > 0 && $seen <= 0.2);   // bool(true): the socket's timeout, not null
+var_dump($seen > 0.15 && $seen < 1.5);                 // bool(true): the socket's timeout, not the server's 2 s
 proc_terminate($p);
 foreach ($pipes as $pp) fclose($pp);
 proc_close($p);

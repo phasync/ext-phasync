@@ -89,9 +89,9 @@ $timed = function () use ($p) {
     return [$r, preg_replace('/^.*?\(\): /', '', error_get_last()['message'] ?? ''), socket_last_error($p[0])];
 };
 $native = $timed();
-$loop = new Loop;
-$loop->runAll(function () use ($timed, &$ext) { $ext = $timed(); });
-echo 'SO_RCVTIMEO: ', $native === $ext ? 'same' : 'DIFF ' . json_encode([$native, $ext]), ', parked with ', round($loop->parkTimeouts[0], 1), " s\n";
+$t = microtime(true);
+(new Loop)->runAll(function () use ($timed, &$ext) { $ext = $timed(); });
+echo 'SO_RCVTIMEO: ', $native === $ext ? 'same' : 'DIFF ' . json_encode([$native, $ext]), ', waited ', round(microtime(true) - $t, 1), " s\n";
 socket_set_option($p[0], SOL_SOCKET, SO_RCVTIMEO, ['sec' => 0, 'usec' => 0]);
 
 // A non-blocking socket stays native: no park.
@@ -136,7 +136,7 @@ bool(true)
 bool(true)
 connect refused: same unable to connect [%d]: Connection refused
 bool(true)
-SO_RCVTIMEO: same, parked with 0.2 s
+SO_RCVTIMEO: same, waited 0.2 s
 non-blocking parks: 0
 read cancelled
 string(4) "kept"

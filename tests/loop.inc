@@ -39,7 +39,7 @@ final class Loop
 {
     public int $parks = 0;             // Suspensions caught
     public ?string $parkThrows = null; // throw this class into a coroutine as soon as it suspends
-    public ?Closure $onPark = null;    // fn(Suspension $s): true = resume it at once (a spurious wake), or throw
+    public ?Closure $onPark = null;    // fn(Suspension $s, Fiber $f): true = resume it at once (a spurious wake), or throw
     public bool $reverse = false;      // resume what became ready in reverse order
     public bool $spin = false;         // always poll(0): a loop that busy-polls
     public LoopPoller $poller;
@@ -93,6 +93,18 @@ final class Loop
         return $fiber;
     }
 
+    /** Start a coroutine now, up to its first suspension (which the loop keeps). */
+    public function start(Closure|Fiber $fn, mixed ...$args): Fiber
+    {
+        $fiber = Suspension::manage($fn instanceof Fiber ? $fn : new Fiber($fn));
+        try {
+            $fiber->start(...$args);
+        } catch (Suspension $s) {
+            $this->suspended($fiber, $s);
+        }
+        return $fiber;
+    }
+
     /** Run until every coroutine is done (a watchdog fails a hung test instead of hanging it). */
     public function run(float $watchdog = 30): void
     {
@@ -140,7 +152,7 @@ final class Loop
         }
         if ($this->onPark) {
             try {
-                if (($this->onPark)($s) === true) {
+                if (($this->onPark)($s, $fiber) === true) {
                     $this->ready[] = [$fiber, $s];   // resumed before it is ready: it suspends again
                     return;
                 }

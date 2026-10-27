@@ -88,11 +88,10 @@ unlink($file);
 [$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
 $loop = new Loop;
 $closer = new Fiber(function () use ($a) {
-    usleep(20000);
     try { fclose($a); echo "closer: closed\n"; } catch (LoopCancelled $e) { echo "closer: ", $e->getMessage(), ", ", get_resource_type($a), "\n"; }
 });
-$loop->onPark = function () use ($loop, $closer) {
-    if (Fiber::getCurrent() === $closer) {       // the closer parks in fclose(): cancel it at once
+$loop->onPark = function (phasync\ext\Suspension $s, Fiber $f) use ($loop, $closer) {
+    if ($f === $closer) {       // the closer parks in fclose(): cancel it at once
         $loop->onPark = null;
         $loop->go(fn() => $loop->cancel($closer));
     }

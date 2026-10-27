@@ -29,14 +29,14 @@ $loop->go(function () use ($loop, &$log, &$done) {
         session_id('sharedlockid');
         session_start();
         $log[] = 'A has the session';
-        for ($i = 0; $i < 20; $i++) $loop->sleep(10000);
+        for ($i = 0; $i < 20; $i++) usleep(10000);
         $_SESSION['by'] = 'A';
         $log[] = 'A done';
     }, new Sink);
     $done++;
 });
 $loop->go(function () use ($loop, &$log, &$done) {
-    $loop->sleep(20000);
+    usleep(20000);
     sapi(function () use (&$log) {
         $log[] = 'B asks for the session';
         session_id('sharedlockid');
@@ -46,7 +46,7 @@ $loop->go(function () use ($loop, &$log, &$done) {
     $done++;
 });
 $loop->go(function () use ($loop, &$ticks, &$done) {
-    while ($done < 2) { $loop->sleep(10000); $ticks++; }
+    while ($done < 2) { usleep(10000); $ticks++; }
 });
 $loop->manage(fn() => $loop->run());
 echo implode("\n", $log), "\n";
@@ -60,12 +60,12 @@ $loop->go(function () use ($loop, &$log2) {
         session_id('diff-a');
         session_start();
         $log2[] = 'A has its own session';
-        for ($i = 0; $i < 20; $i++) $loop->sleep(10000);
+        for ($i = 0; $i < 20; $i++) usleep(10000);
         $log2[] = 'A done';
     }, new Sink);
 });
 $loop->go(function () use ($loop, &$log2) {
-    $loop->sleep(5000);
+    usleep(5000);
     sapi(function () use (&$log2) {
         session_id('diff-b');
         session_start();
