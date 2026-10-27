@@ -8,110 +8,95 @@
 namespace phasync\ext {
 
 /**
- * Waiting for streams, for an event loop, on epoll.
+ * How a blocking call in a fiber reaches an event loop, instead of blocking the
+ * process.
  *
- * The loop gives it its slots: getSlot(): int returns a slot number no one else
- * uses; park(int $slot, float $timeout): void suspends the current coroutine in
- * the slot until unpark(), or until $timeout seconds pass (then it throws the
- * loop's timeout exception) or it is cancelled (then it throws that);
- * unpark(int $slot): bool resumes the coroutine parked in the slot, false if the
- * slot is vacant (its wait was cancelled or timed out).
+ * A loop opts its fibers in with manage(). When code in a managed fiber, or in an
+ * unmanaged fiber it runs, makes a blocking call (sockets and TLS, pipes and
+ * processes, STDIN/STDOUT/STDERR and echo in the CLI, stream_select() and
+ * socket_select(), the sleep functions, DNS, file and filesystem calls through a
+ * worker thread pool, flock(), curl, PDO pgsql, memcached ...), the extension
+ * suspends the nearest managed fiber and throws a Suspension out of the
+ * start()/resume()/throw() that ran it. The loop keeps it, waits for it with
+ * poll(), and resumes it with resume() once it is ready; the call then completes
+ * in the fiber exactly as it would have natively, with PHP's own results, errors
+ * and timeouts. Outside a managed fiber every call behaves natively, and a
+ * Suspension is never thrown.
  *
- * A wait takes a fresh slot and parks in it; the Poller unparks only on PHP's
- * thread, inside poll(). poll() also wakes the waiters of hooked operations
- * started under a manage() that was given this Poller (thread-pool work such as
- * file operations and DNS). The loop keeps its Poller alive: waiters parked
- * through a Poller that is freed are never unparked, so their waits run to their
- * timeouts. A Poller belongs to the process that created it: after fork(),
- * create a new one (using this one throws).
+ * An unmanaged fiber the managed one runs (a library's own) stays where it is
+ * while the managed fiber is suspended: it looks running (its resume() throws
+ * FiberError), and resuming the managed fiber continues it.
+ *
+ * Suspensions are pooled by the extension: one whose wait is over is reused once
+ * nothing else holds it, and WeakMap entries and WeakReferences to it are cleared
+ * then. A loop that drops a pending Suspension drops its fiber with it.
  *
  * @strict-properties
  * @not-serializable
  */
-final class Poller
+final class Suspension extends \Exception
 {
-    public function __construct(\Closure $getSlot, \Closure $park, \Closure $unpark) {}
+    private function __construct() {}
 
     /**
-     * Wait up to $maxTime seconds (0: don't wait) until something waited on is
-     * ready, unpark its waiters, and return: the loop's one blocking call.
-     * poll(0) with nothing waited on and no finished thread task queued returns
-     * without a syscall.
+     * Wait up to $seconds (0: don't wait; negative: no limit) until at least one of
+     * $suspensions is ready, and return the ready ones with their keys. A wait that
+     * timed out (a socket's native timeout, a sleep) counts as ready. Called in a
+     * managed fiber, it is a blocking call like any other: it suspends that fiber
+     * with a Suspension that is ready when one of these is, so a loop can run inside
+     * another loop's fiber.
+     *
+     * @param array<Suspension> $suspensions
+     * @return array<Suspension>
      */
-    public function poll(float $maxTime): void {}
+    public static function poll(array $suspensions, float $seconds): array {}
+
+    /** Opt $fiber in: its blocking calls suspend it with a Suspension. Returns $fiber. */
+    public static function manage(\Fiber $fiber): \Fiber {}
 
     /**
-     * Park the current coroutine until $stream is readable, or at its end, or
-     * failed (the next read then reports it the way PHP does). The loop's
-     * exceptions (a timeout after $timeout seconds, a cancellation) propagate as
-     * they are. One coroutine at a time may wait to read a stream (LogicException).
+     * Wait until $stream is readable, or at its end, or failed (the next read then
+     * reports it as PHP does): suspends the managed fiber, or blocks outside one.
+     * Returns at once when the stream has buffered data. False if $timeout seconds
+     * passed first.
      *
      * @param resource $stream
      */
-    public function readable(mixed $stream, float $timeout = \PHP_FLOAT_MAX): void {}
+    public static function readable(mixed $stream, ?float $timeout = null): bool {}
 
     /**
-     * Park the current coroutine until $stream is writable, or closed, or failed,
-     * as readable() does.
+     * Wait until $stream is writable, or closed, or failed, as readable() does.
      *
      * @param resource $stream
      */
-    public function writable(mixed $stream, float $timeout = \PHP_FLOAT_MAX): void {}
+    public static function writable(mixed $stream, ?float $timeout = null): bool {}
+
+    /**
+     * Preempt a managed fiber that runs $seconds without suspending, at its next
+     * checkpoint (between loop iterations), with a Suspension that is ready at once.
+     * Not where a fiber can't switch (docs/c-to-php-suspension.md lists them),
+     * nor in destructors, exception handlers, shutdown functions, or
+     * #[\phasync\Uninterruptible] functions and what they call. A timer thread asks
+     * for it (not a signal: no syscall fails with EINTR). null stops it.
+     */
+    public static function setPreemptInterval(?float $seconds): void {}
+
+    /** True once poll() has found it ready; resume() may be called then. */
+    public function isReady(): bool {}
+
+    /**
+     * Resume the fiber: its blocking call completes. Returns what Fiber::resume()
+     * returns, and throws the fiber's next Suspension. LogicException if it isn't
+     * ready, or was resumed already.
+     */
+    public function resume(): mixed {}
+
+    /**
+     * Throw $exception into the fiber at its blocking call, which is abandoned (a
+     * cancellation); ready or not. LogicException if it was resumed already.
+     */
+    public function throw(\Throwable $exception): mixed {}
 }
-
-/**
- * Call $fn at most every $minInterval seconds (wall clock), between iterations
- * of whatever PHP loop is running then, so a scheduler can preempt a coroutine
- * that never yields: $fn may call Fiber::suspend(), and resuming the fiber
- * continues the loop.
- *
- * Preemption happens only between loop iterations, and not where the callback
- * of a C function or the engine may not suspend (docs/c-to-php-suspension.md
- * lists them: usort() and kin, error and output handlers, autoloaders, magic
- * property methods, serialization hooks, session handlers, stream wrappers
- * beyond plain I/O ...), nor in destructors, exception handlers, shutdown
- * functions, or #[\phasync\Uninterruptible] functions and what they call, down
- * to the fiber's first frame. Code without a loop is never
- * interrupted. A timer thread (not a signal: no syscall fails with EINTR) asks
- * the engine to interrupt; $fn runs once, without arguments. It is skipped
- * where suspending would throw FiberError (pcntl signal handlers, a fiber being
- * destroyed). It is never called while a call of it is still running in the
- * same fiber. An exception $fn throws surfaces at the interrupted point.
- *
- * Returns the previous closure. null removes it and stops the timer; with none
- * set there is no thread and no interrupt. It is per process (per thread on ZTS
- * builds), and a fork()ed child keeps it and has its own timer.
- */
-function set_preempt_function(?\Closure $fn, float $minInterval = 0.1): ?\Closure {}
-
-/**
- * Run $task with transparent fiber-async I/O active for its dynamic extent.
- *
- * While $task runs, blocking I/O inside a coroutine (fiber) parks it through
- * $poller instead of blocking the process, and the extension does the real I/O
- * once it may continue; the loop's $poller->poll() wakes it. $sleep(int
- * $microseconds) waits that long (a timer). Both are also called from a Fiber a
- * coroutine runs itself; the loop then runs in place in that Fiber until the
- * coroutine's wait is over, since suspending the Fiber would return to the
- * coroutine's own code.
- *
- * When PHP's own call has a timeout (a socket's stream_set_timeout() or
- * default_socket_timeout), the extension passes it to park(); if park() throws
- * $timeoutException once it has run out, the call finishes exactly as native PHP
- * does on a timeout (partial data or false, stream_get_meta_data()['timed_out'],
- * the notice for a timed-out send). Any other exception (a cancellation)
- * propagates out of the hooked function unchanged.
- *
- * Covers tcp/unix/ssl/tls sockets, stream_socket_pair(), proc_open()/popen()
- * pipes and process waits, STDIN/STDOUT/STDERR and echo in the CLI,
- * stream_select()/socket_select(), the sleep functions, DNS, file and
- * filesystem calls (through a worker thread pool) and flock(). A stream the
- * caller made non-blocking is never waited on: it behaves natively.
- *
- * Calls nest: an inner manage() sends hooked I/O to its own Poller until it
- * returns. Outside a coroutine, calls behave natively. Returns what $task returns.
- */
-function manage(\Closure $task, Poller $poller, \Closure $sleep, string $timeoutException): mixed {}
 
 /**
  * Run $code as one web request: it, and every fiber started inside it, have

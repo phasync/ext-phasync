@@ -279,7 +279,6 @@ static PHP_GINIT_FUNCTION(phasync)
 	zend_hash_init(&phasync_globals->sock_hooks, 8, NULL, NULL, 1);
 	zend_hash_init(&phasync_globals->conn_hooks, 64, NULL, NULL, 1);
 	zend_hash_init(&phasync_globals->conn_busy, 8, NULL, NULL, 1);
-	ZVAL_UNDEF(&phasync_globals->preempt_fn);
 	phasync_globals->mountinfo_fd = -1;
 }
 
@@ -446,8 +445,6 @@ static PHP_RSHUTDOWN_FUNCTION(phasync)
 		phasync_preempt_stop(PHASYNC_G(preempt));
 		PHASYNC_G(preempt) = NULL;
 	}
-	zval_ptr_dtor(&PHASYNC_G(preempt_fn));
-	ZVAL_UNDEF(&PHASYNC_G(preempt_fn));
 	phasync_req_rshutdown();
 	phasync_restore_hooks();
 	/* Leave the hooked table intact: streams may close later in shutdown. */

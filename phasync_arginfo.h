@@ -8,9 +8,8 @@
 #else
 # define PHASYNC_RAW_FENTRY(zend_name, name, arg_info, flags, frameless_infos, doc) ZEND_RAW_FENTRY(zend_name, name, arg_info, flags)
 #endif
-ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_phasync_ext_set_preempt_function, 0, 1, Closure, 1)
-	ZEND_ARG_OBJ_INFO(0, fn, Closure, 1)
-	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, minInterval, IS_DOUBLE, 0, "0.1")
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Suspension_setPreemptInterval, 0, 1, IS_VOID, 0)
+	ZEND_ARG_TYPE_INFO(0, seconds, IS_DOUBLE, 1)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_phasync_ext_sapi, 0, 2, IS_MIXED, 0)
@@ -63,7 +62,6 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Suspension_thr
 	ZEND_ARG_OBJ_INFO(0, exception, Throwable, 0)
 ZEND_END_ARG_INFO()
 
-ZEND_FUNCTION(phasync_ext_set_preempt_function);
 ZEND_FUNCTION(phasync_ext_sapi);
 ZEND_FUNCTION(phasync_ext_run_next);
 ZEND_FUNCTION(phasync_ext_dup2);
@@ -77,9 +75,9 @@ ZEND_METHOD(phasync_ext_Suspension, writable);
 ZEND_METHOD(phasync_ext_Suspension, isReady);
 ZEND_METHOD(phasync_ext_Suspension, resume);
 ZEND_METHOD(phasync_ext_Suspension, throw);
+ZEND_METHOD(phasync_ext_Suspension, setPreemptInterval);
 
 static const zend_function_entry ext_functions[] = {
-	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "set_preempt_function"), zif_phasync_ext_set_preempt_function, arginfo_phasync_ext_set_preempt_function, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "sapi"), zif_phasync_ext_sapi, arginfo_phasync_ext_sapi, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "run_next"), zif_phasync_ext_run_next, arginfo_phasync_ext_run_next, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "dup2"), zif_phasync_ext_dup2, arginfo_phasync_ext_dup2, 0, NULL, NULL)
@@ -97,6 +95,7 @@ static const zend_function_entry class_phasync_ext_Suspension_methods[] = {
 	ZEND_ME(phasync_ext_Suspension, isReady, arginfo_class_phasync_ext_Suspension_isReady, ZEND_ACC_PUBLIC)
 	ZEND_ME(phasync_ext_Suspension, resume, arginfo_class_phasync_ext_Suspension_resume, ZEND_ACC_PUBLIC)
 	ZEND_ME(phasync_ext_Suspension, throw, arginfo_class_phasync_ext_Suspension_throw, ZEND_ACC_PUBLIC)
+	ZEND_ME(phasync_ext_Suspension, setPreemptInterval, arginfo_class_phasync_ext_Suspension_setPreemptInterval, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC)
 	ZEND_FE_END
 };
 

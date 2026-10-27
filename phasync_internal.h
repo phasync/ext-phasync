@@ -105,7 +105,6 @@ struct phasync_preempt;
 
 ZEND_BEGIN_MODULE_GLOBALS(phasync)
 	struct phasync_preempt *preempt; /* set_preempt_function()'s timer, NULL = none */
-	zval preempt_fn;              /* its closure, UNDEF = none                     */
 	zval *preempt_due;            /* phasync\ext\__PREEMPT_DUE's value: true = a checkpoint calls */
 	struct phasync_susp **susp;   /* the Suspension pool; an index is a wait's slot */
 	uint32_t *susp_spare;         /* indexes of retired ones, reused once only the pool holds them */

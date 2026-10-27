@@ -273,7 +273,8 @@ static zend_never_inline void phasync_checkpoint_hit(zend_execute_data *ex, bool
 	phasync_preempt *p = PHASYNC_G(preempt);
 	zend_execute_data *saved_ex;
 	const zend_op *saved_op;
-	zval fn, retval;
+	zend_fiber *m;
+	phasync_susp *s;
 
 	phasync_flag_store(&Z_TYPE_INFO_P(PHASYNC_G(preempt_due)), IS_FALSE);
 	if (!p || !zend_atomic_bool_load_ex(&p->pending)) {
@@ -290,9 +291,9 @@ static zend_never_inline void phasync_checkpoint_hit(zend_execute_data *ex, bool
 	pthread_cond_signal(&p->cond);
 	pthread_mutex_unlock(&p->mutex);
 
-	/* Where Fiber::suspend() would throw (pcntl handlers, a fiber being
-	 * destroyed), skip: the next interval gets it. */
-	if (zend_fiber_switch_blocked() || phasync_unwinding()) {
+	/* Only managed fibers are preempted, and not where a fiber can't switch (pcntl
+	 * handlers, a fiber being destroyed): the next interval gets it. */
+	if (phasync_unwinding() || (m = phasync_managed_top()) == NULL) {
 		return;
 	}
 	saved_ex = EG(current_execute_data);
@@ -302,12 +303,13 @@ static zend_never_inline void phasync_checkpoint_hit(zend_execute_data *ex, bool
 	} else {
 		ex->opline = saved_op + 1;
 	}
-	ZVAL_COPY(&fn, &PHASYNC_G(preempt_fn));   /* it may replace itself */
+	/* A Suspension that is ready at once: the loop resumes the fiber when it chooses. */
+	s = phasync_susp_take();
+	s->state = PHASYNC_S_READY;
 	zend_hash_index_add_empty_element(&phasync_suspend_roots, (zend_ulong) (uintptr_t) EG(current_execute_data));
-	call_user_function(NULL, NULL, &fn, &retval, 0, NULL);
+	phasync_susp_wait(m, s);   /* an exception thrown in (a cancellation) stays pending here */
 	zend_hash_index_del(&phasync_suspend_roots, (zend_ulong) (uintptr_t) EG(current_execute_data));
-	zval_ptr_dtor(&retval);
-	zval_ptr_dtor(&fn);
+	phasync_susp_retire(s);
 	if (own_frame) {
 		EG(current_execute_data) = saved_ex;
 	} else if (!EG(exception)) {
@@ -695,30 +697,31 @@ static void phasync_checkpoint_startup(void)
 	zend_register_extension(&phasync_zend_extension, NULL);
 }
 
-ZEND_FUNCTION(phasync_ext_set_preempt_function)
+/* Suspension::setPreemptInterval(?float $seconds): preempt managed fibers that run for
+ * $seconds without suspending, at their next checkpoint, with a Suspension that is ready
+ * at once. null stops it (and its timer thread). */
+ZEND_METHOD(phasync_ext_Suspension, setPreemptInterval)
 {
-	zend_object *fn;
-	double interval = 0.1;
+	double interval = 0;
+	bool off = true;
 	phasync_preempt *p;
 
-	ZEND_PARSE_PARAMETERS_START(1, 2)
-		Z_PARAM_OBJ_OF_CLASS_OR_NULL(fn, zend_ce_closure)
-		Z_PARAM_OPTIONAL
-		Z_PARAM_DOUBLE(interval)
+	ZEND_PARSE_PARAMETERS_START(1, 1)
+		Z_PARAM_DOUBLE_OR_NULL(interval, off)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!(interval > 0) || !zend_finite(interval)) {
-		zend_argument_value_error(2, "must be a positive number of seconds");
+	if (!off && (!(interval > 0) || !zend_finite(interval))) {
+		zend_argument_value_error(1, "must be a positive number of seconds or null");
 		RETURN_THROWS();
 	}
 	p = PHASYNC_G(preempt);
-	if (fn && !p) {
+	if (!off && !p) {
 		if (!(p = phasync_preempt_start(interval))) {
 			zend_throw_error(NULL, "Could not start the preempt timer thread");
 			RETURN_THROWS();
 		}
 		PHASYNC_G(preempt) = p;
-	} else if (fn) {
+	} else if (!off) {
 		pthread_mutex_lock(&p->mutex);
 		p->interval = interval;
 		pthread_cond_signal(&p->cond);
@@ -726,16 +729,6 @@ ZEND_FUNCTION(phasync_ext_set_preempt_function)
 	} else if (p) {
 		PHASYNC_G(preempt) = NULL;
 		phasync_preempt_stop(p);
-	}
-	if (Z_TYPE(PHASYNC_G(preempt_fn)) == IS_UNDEF) {
-		RETVAL_NULL();
-	} else {
-		ZVAL_COPY_VALUE(return_value, &PHASYNC_G(preempt_fn));
-	}
-	if (fn) {
-		ZVAL_OBJ_COPY(&PHASYNC_G(preempt_fn), fn);
-	} else {
-		ZVAL_UNDEF(&PHASYNC_G(preempt_fn));
 	}
 }
 

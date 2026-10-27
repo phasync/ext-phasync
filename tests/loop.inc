@@ -1,138 +1,84 @@
 <?php
-// A minimal event loop for the tests, on the extension's contract: slots
-// (getSlot/park/unpark) given to a phasync\ext\Poller, a sleep timer, and the
-// Poller's poll() as the one blocking call. It counts parks, and records the
-// timeouts park() was given. A wait from a Fiber a coroutine runs itself
-// (not a coroutine of this loop) drives the loop until the coroutine's wait is
-// done: the Fiber stays where it is, other coroutines run meanwhile.
+// A minimal event loop for the tests, on the extension's contract: its coroutines are
+// managed fibers (Suspension::manage()); a blocking call in one throws a Suspension out
+// of the resume() that ran it, and Suspension::poll() is the loop's one blocking call.
+// It counts the Suspensions it was given ($parks).
+
+use phasync\ext\Suspension;
 
 final class LoopTimeout extends Exception {}
 final class LoopCancelled extends Exception {}
 
+/** What tests used to reach through the loop's Poller: waits on streams, and one poll. */
+final class LoopPoller
+{
+    public function __construct(private Loop $loop) {}
+
+    /** Wait until $stream is readable; LoopTimeout once $timeout seconds have passed. */
+    public function readable(mixed $stream, float $timeout = PHP_FLOAT_MAX): void
+    {
+        if (!Suspension::readable($stream, $timeout >= PHP_FLOAT_MAX ? null : $timeout)) {
+            throw new LoopTimeout('timed out');
+        }
+    }
+
+    public function writable(mixed $stream, float $timeout = PHP_FLOAT_MAX): void
+    {
+        if (!Suspension::writable($stream, $timeout >= PHP_FLOAT_MAX ? null : $timeout)) {
+            throw new LoopTimeout('timed out');
+        }
+    }
+
+    public function poll(float $maxTime): void
+    {
+        $this->loop->poll($maxTime);
+    }
+}
+
 final class Loop
 {
-    public int $parks = 0;
-    public array $parkTimeouts = [];   // what park() was given (null: none)
-    public int $sleeps = 0;
-    public array $sleepCalls = [];     // the microseconds asked for
-    public bool $instantSleep = false; // record sleeps, don't wait
-    public ?string $parkThrows = null; // park() throws this class at once
-    public ?Closure $onPark = null;    // fn(int $slot, ?float $timeout): true = return at once (a spurious wake), or throw
+    public int $parks = 0;             // Suspensions caught
+    public ?string $parkThrows = null; // throw this class into a coroutine as soon as it suspends
+    public ?Closure $onPark = null;    // fn(Suspension $s): true = resume it at once (a spurious wake), or throw
     public bool $reverse = false;      // resume what became ready in reverse order
     public bool $spin = false;         // always poll(0): a loop that busy-polls
-    public \phasync\ext\Poller $poller;
+    public LoopPoller $poller;
 
-    private int $nextSlot = 0;
-    private array $parked = [];        // slot => Fiber
-    private array $deadlines = [];     // slot => microtime deadline
-    private array $ready = [];         // [Fiber, 'start' | null | Throwable]
-    private array $timers = [];        // [microtime, Fiber]
-    private ?Fiber $current = null;    // the coroutine running
-    private array $nested = [];        // spl_object_id(coroutine) => null waiting, true woken, or the Throwable it gets
+    private array $pending = [];       // id => [Fiber, Suspension]
+    private array $ready = [];         // [Fiber, 'start' | Suspension | [Suspension, Throwable]]
+    private array $startArgs = [];     // spl_object_id(coroutine) => what go() passes to start()
+    private float $end = PHP_FLOAT_MAX;
+    private int $nextId = 0;
 
     public function __construct()
     {
-        $this->poller = new \phasync\ext\Poller($this->getSlot(...), $this->park(...), $this->unpark(...));
+        $this->poller = new LoopPoller($this);
     }
 
-    public function getSlot(): int
-    {
-        return $this->nextSlot++;
-    }
-
-    public function park(int $slot, float $timeout): void
-    {
-        if (isset($this->parked[$slot])) {
-            throw new LogicException("Slot $slot is taken");
-        }
-        $this->parks++;
-        $this->parkTimeouts[] = $timeout >= PHP_FLOAT_MAX ? null : $timeout;
-        if ($this->parkThrows !== null) {
-            throw new ($this->parkThrows)();
-        }
-        if ($this->onPark && ($this->onPark)($slot, end($this->parkTimeouts)) === true) {
-            return;
-        }
-        $this->parked[$slot] = $this->current ?? Fiber::getCurrent();
-        if ($timeout < PHP_FLOAT_MAX) {
-            $this->deadlines[$slot] = microtime(true) + $timeout;
-        }
-        $this->wait();
-    }
-
-    /** Suspend the running coroutine, or, in a Fiber it runs itself, drive the loop until it is woken. */
-    private function wait(): void
-    {
-        if ($this->current === null || Fiber::getCurrent() === $this->current) {   // null: a fiber the test runs itself
-            Fiber::suspend();
-            return;
-        }
-        $me = $this->current;
-        $id = spl_object_id($me);
-        $this->nested[$id] = null;
-        try {
-            while ($this->nested[$id] === null) {
-                $this->step();
-            }
-        } finally {
-            $how = $this->nested[$id];
-            unset($this->nested[$id]);
-            $this->current = $me;
-        }
-        if ($how instanceof Throwable) {
-            throw $how;
-        }
-    }
-
-    public function unpark(int $slot): bool
-    {
-        if (!isset($this->parked[$slot])) {
-            return false;
-        }
-        $this->ready[] = [$this->parked[$slot], null];
-        unset($this->parked[$slot], $this->deadlines[$slot]);
-        return true;
-    }
-
-    public function sleep(int $microseconds): void
-    {
-        $this->sleeps++;
-        $this->sleepCalls[] = $microseconds;
-        if ($this->instantSleep) {
-            return;
-        }
-        $this->timers[] = [microtime(true) + $microseconds / 1e6, $this->current ?? Fiber::getCurrent()];
-        $this->wait();
-    }
-
-    /** Throw $e into a parked coroutine, as a cancellation does. */
+    /** Throw $e into a suspended coroutine, as a cancellation does. */
     public function cancel(Fiber $fiber, Throwable $e = new LoopCancelled('cancelled')): void
     {
-        foreach ($this->parked as $slot => $f) {
+        foreach ($this->pending as $id => [$f, $s]) {
             if ($f === $fiber) {
-                unset($this->parked[$slot], $this->deadlines[$slot]);
+                unset($this->pending[$id]);
+                $this->ready[] = [$fiber, [$s, $e]];
+                return;
             }
         }
-        foreach ($this->timers as $k => [, $f]) {
-            if ($f === $fiber) {
-                unset($this->timers[$k]);
+        foreach ($this->ready as $k => [$f, $how]) {
+            if ($f === $fiber && $how instanceof Suspension) {
+                $this->ready[$k] = [$fiber, [$how, $e]];
+                return;
             }
         }
-        $this->ready = array_values(array_filter($this->ready, fn($r) => $r[0] !== $fiber));   // a wake-up queued already
-        $this->ready[] = [$fiber, $e];
     }
 
     /** Forget a coroutine, as a loop dropping it does: its last reference may be the caller's. */
     public function drop(Fiber $fiber): void
     {
-        foreach ($this->parked as $slot => $f) {
+        foreach ($this->pending as $id => [$f]) {
             if ($f === $fiber) {
-                unset($this->parked[$slot], $this->deadlines[$slot]);
-            }
-        }
-        foreach ($this->timers as $k => [, $f]) {
-            if ($f === $fiber) {
-                unset($this->timers[$k]);
+                unset($this->pending[$id]);
             }
         }
         $this->ready = array_values(array_filter($this->ready, fn($r) => $r[0] !== $fiber));
@@ -141,7 +87,7 @@ final class Loop
     /** $args are passed to Fiber::start(): the coroutine's first frame is then a call from C with them. */
     public function go(Closure|Fiber $fn, mixed ...$args): Fiber
     {
-        $fiber = $fn instanceof Fiber ? $fn : new Fiber($fn);
+        $fiber = Suspension::manage($fn instanceof Fiber ? $fn : new Fiber($fn));
         $this->ready[] = [$fiber, 'start'];
         $this->startArgs[spl_object_id($fiber)] = $args;
         return $fiber;
@@ -154,83 +100,83 @@ final class Loop
         while ($this->step());
     }
 
-    private float $end = PHP_FLOAT_MAX;
-
-    private array $startArgs = [];     // spl_object_id(coroutine) => what go() passes to start()
-
     /** One round: run what is ready, then poll. False when nothing is left. */
     private function step(): bool
     {
-            while ($this->ready) {
-                [$fiber, $how] = array_shift($this->ready);
-                if (array_key_exists($id = spl_object_id($fiber), $this->nested)) {
-                    $this->nested[$id] = $how ?? true;   // a coroutine waiting in a Fiber of its own: its wait is done
-                    continue;
+        while ($this->ready) {
+            [$fiber, $how] = array_shift($this->ready);
+            try {
+                if ($how === 'start') {
+                    $id = spl_object_id($fiber);
+                    $args = $this->startArgs[$id] ?? [];
+                    unset($this->startArgs[$id]);
+                    $fiber->start(...$args);
+                } elseif (is_array($how)) {
+                    [$s, $e] = $how;
+                    $s->throw($e);
+                } else {
+                    $how->resume();
                 }
-                $prev = $this->current;
-                $this->current = $fiber;
-                try {
-                    if ($how === 'start') {
-                        $args = $this->startArgs[$id] ?? [];
-                        unset($this->startArgs[$id]);
-                        $fiber->start(...$args);
-                    } elseif ($how instanceof Throwable) {
-                        $fiber->throw($how);
-                    } else {
-                        $fiber->resume();
-                    }
-                } finally {
-                    $this->current = $prev;
-                }
+            } catch (Suspension $s) {
+                $this->suspended($fiber, $s);
             }
-            if (!$this->parked && !$this->timers) {
-                return false;
-            }
-            if (microtime(true) > $this->end) {
-                throw new RuntimeException('Loop watchdog: ' . count($this->parked) . ' coroutine(s) still parked');
-            }
-            $now = microtime(true);
-            $next = $now + 0.5;
-            foreach ($this->deadlines as $d) {
-                $next = min($next, $d);
-            }
-            foreach ($this->timers as [$t]) {
-                $next = min($next, $t);
-            }
-            $ready = count($this->ready);
-            $this->poller->poll($this->spin ? 0 : max(0, $next - $now));
-            if ($this->reverse) {
-                $this->ready = array_merge(array_slice($this->ready, 0, $ready), array_reverse(array_slice($this->ready, $ready)));
-            }
-            $now = microtime(true);
-            foreach ($this->timers as $k => [$t, $fiber]) {
-                if ($t <= $now) {
-                    unset($this->timers[$k]);
-                    $this->ready[] = [$fiber, null];
-                }
-            }
-            foreach ($this->deadlines as $slot => $d) {
-                if ($d <= $now) {
-                    $this->ready[] = [$this->parked[$slot], new LoopTimeout('timed out')];
-                    unset($this->parked[$slot], $this->deadlines[$slot]);
-                }
-            }
-            return true;
+        }
+        if (!$this->pending) {
+            return false;
+        }
+        if (microtime(true) > $this->end) {
+            throw new RuntimeException('Loop watchdog: ' . count($this->pending) . ' coroutine(s) still suspended');
+        }
+        $this->poll($this->spin ? 0 : 0.5);
+        return true;
     }
 
-    public function manage(Closure $task, string $timeoutClass = LoopTimeout::class): mixed
+    private function suspended(Fiber $fiber, Suspension $s): void
     {
-        return \phasync\ext\manage($task, $this->poller, $this->sleep(...), $timeoutClass);
+        $this->parks++;
+        if ($this->parkThrows !== null) {
+            $this->ready[] = [$fiber, [$s, new ($this->parkThrows)()]];
+            return;
+        }
+        if ($this->onPark) {
+            try {
+                if (($this->onPark)($s) === true) {
+                    $this->ready[] = [$fiber, $s];   // resumed before it is ready: it suspends again
+                    return;
+                }
+            } catch (Throwable $e) {
+                $this->ready[] = [$fiber, [$s, $e]];
+                return;
+            }
+        }
+        $this->pending[$this->nextId++] = [$fiber, $s];
     }
 
-    /** Run the coroutines inside manage() until all are done. */
+    /** Poll the pending Suspensions for at most $maxTime seconds; queue the ready ones. */
+    public function poll(float $maxTime): void
+    {
+        $ready = Suspension::poll(array_map(fn($p) => $p[1], $this->pending), $maxTime);
+        if ($this->reverse) {
+            $ready = array_reverse($ready, true);
+        }
+        foreach ($ready as $id => $s) {
+            $this->ready[] = [$this->pending[$id][0], $s];
+            unset($this->pending[$id]);
+        }
+    }
+
+    /** Kept for the tests' shape: the hooks follow the managed fibers, so this just runs $task. */
+    public function manage(Closure $task): mixed
+    {
+        return $task();
+    }
+
+    /** Run the coroutines until all are done. */
     public function runAll(Closure|Fiber ...$coroutines): void
     {
-        $this->manage(function () use ($coroutines) {
-            foreach ($coroutines as $c) {
-                $this->go($c);
-            }
-            $this->run();
-        });
+        foreach ($coroutines as $c) {
+            $this->go($c);
+        }
+        $this->run();
     }
 }
