@@ -18,12 +18,8 @@ preempt_main(__DIR__ . '/preempt_checkpoint_values.body.inc');
 bool(true)
 bool(true)
 int(13961473)
-#0 %s(%d): {closure%S}()
-#1 %s(%d): loop()
-from the closure at line %d
-#0 %s(%d): {closure%S}()
-#1 %s(%d): loop()
-#2 {main}
+interrupted in loop()
+caught around loop(): from the closure
 bool(true)
 bool(false)
 bool(true)

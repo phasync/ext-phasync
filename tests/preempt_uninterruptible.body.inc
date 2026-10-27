@@ -38,18 +38,18 @@ echo "-- suspended on I/O, others run and are preempted meanwhile\n";
 require __DIR__ . '/loop.inc';
 [$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
 $preempted = 0;
-preempt_handler(function () use (&$preempted) {
-    if (Fiber::getCurrent()) {
-        $preempted++;
-        usleep(1);          // yields to the loop
-    }
-}, 0.005);
+phasync\ext\Suspension::setPreemptInterval(0.005);
 
 #[Uninterruptible]
 function readIt($stream): string { return fread($stream, 10); }
 
 $done = false;
 $loop = new Loop;
+$loop->onPark = function (phasync\ext\Suspension $s) use (&$preempted) {
+    if ($s->isReady()) {
+        $preempted++;       // ready at once: a preemption
+    }
+};
 $loop->runAll(
     function () use ($a, &$done, &$preempted) {
         $got = readIt($a);
@@ -64,5 +64,5 @@ $loop->runAll(
         fwrite($b, 'data');
     },
 );
-preempt_handler(null);
+phasync\ext\Suspension::setPreemptInterval(null);
 ?>

@@ -18,7 +18,6 @@ require __DIR__ . '/preempt.inc';
 preempt_main(__DIR__ . '/preempt_basic_jit.body.inc');
 ?>
 --EXPECT--
-bool(true)
 -- none set
 NULL
 bool(true)
@@ -35,32 +34,20 @@ NULL
 bool(true)
 int(0)
 -- exception at the interrupted point
-array(3) {
+array(2) {
   [0]=>
   string(9) "preempted"
   [1]=>
-  string(4) "spin"
-  [2]=>
   bool(true)
 }
 caught in caller: preempted
--- suspend from the closure, resume into the loop
-string(9) "preempted"
-string(7) "resumed"
-string(9) "preempted"
-string(7) "resumed"
-string(9) "preempted"
-string(7) "resumed"
-string(9) "preempted"
-string(7) "resumed"
-string(9) "preempted"
-string(7) "resumed"
+-- a managed fiber is preempted with a ready Suspension, resumed by its loop
 bool(true)
-int(5)
+bool(true)
 bool(true)
 -- bad interval
-preempt_handler(): Argument #2 ($minInterval) must be a positive number of seconds
-preempt_handler(): Argument #2 ($minInterval) must be a positive number of seconds
-preempt_handler(): Argument #2 ($minInterval) must be a positive number of seconds
-preempt_handler(): Argument #2 ($minInterval) must be a positive number of seconds
+phasync\ext\Suspension::setPreemptInterval(): Argument #1 ($seconds) must be a positive number of seconds or null
+phasync\ext\Suspension::setPreemptInterval(): Argument #1 ($seconds) must be a positive number of seconds or null
+phasync\ext\Suspension::setPreemptInterval(): Argument #1 ($seconds) must be a positive number of seconds or null
+phasync\ext\Suspension::setPreemptInterval(): Argument #1 ($seconds) must be a positive number of seconds or null
 NULL

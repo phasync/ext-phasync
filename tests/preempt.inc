@@ -12,6 +12,7 @@ use phasync\ext\Suspension;
 final class PreemptTest
 {
     public static ?\Closure $fn = null;
+    public static ?\Fiber $fiber = null;   // the managed fiber preempt_main() runs: the interrupted one
 }
 
 function preempt_handler(?\Closure $fn, float $minInterval = 0.1): ?\Closure
@@ -24,7 +25,7 @@ function preempt_handler(?\Closure $fn, float $minInterval = 0.1): ?\Closure
 
 function preempt_main(string $file): void
 {
-    $fiber = Suspension::manage(new \Fiber(fn() => \phasync\ext\include_global($file)));
+    $fiber = PreemptTest::$fiber = Suspension::manage(new \Fiber(fn() => \phasync\ext\include_global($file)));
     $resume = fn() => $fiber->start();
     for (;;) {
         try {

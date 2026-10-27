@@ -6,7 +6,6 @@ $calls = [];
 $where = 'other';
 preempt_handler(function () use (&$calls, &$where) {
     $calls[] = $where;
-    if (Fiber::getCurrent()) Fiber::suspend();
 }, 0.02);
 
 echo "-- signals\n";
@@ -18,19 +17,12 @@ pcntl_signal(SIGUSR1, function () use (&$signals, &$where) {
     spin(0.2);             // fiber switching is blocked in a handler: skipped
     $where = 'other';
 });
-$f = new Fiber(function () {
-    for ($i = 0; $i < 3; $i++) {
-        exec('kill -USR1 ' . getmypid());
-        spin(0.1);
-    }
-});
-$f->start();
-$resumes = 0;
-while (!$f->isTerminated()) {
-    $resumes++;
-    $f->resume();
+// The spinning runs in the managed fiber preempt_main() runs: its loop counts the preemptions.
+for ($i = 0; $i < 3; $i++) {
+    exec('kill -USR1 ' . getmypid());
+    spin(0.1);
 }
-var_dump($signals, $resumes > 0, in_array('signal', $calls, true));
+var_dump($signals, count($calls) > 0, in_array('signal', $calls, true));
 
 echo "-- time limit\n";
 $calls = [];

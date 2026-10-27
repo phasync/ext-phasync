@@ -72,6 +72,14 @@ final class Suspension extends \Exception
     public static function writable(mixed $stream, ?float $timeout = null): bool {}
 
     /**
+     * A blocking point for PHP code (a library's own wait: a sleep, a lock, a
+     * channel): suspends the nearest managed fiber, from anywhere in the fibers it
+     * runs, with a Suspension that is ready at once. The loop resumes it, or throws
+     * into it, when the wait is over. LogicException outside a managed fiber.
+     */
+    public static function suspend(): void {}
+
+    /**
      * Preempt a managed fiber that runs $seconds without suspending, at its next
      * checkpoint (between loop iterations), with a Suspension that is ready at once.
      * Not where a fiber can't switch (docs/c-to-php-suspension.md lists them),

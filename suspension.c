@@ -471,22 +471,19 @@ ZEND_METHOD(phasync_ext_Suspension, poll)
 	if (EG(exception)) {
 		RETURN_THROWS();
 	}
+	/* Take what the kernel has ready first, without waiting, even when some of these are
+	 * ready already: a loop busy with ready fibers (a preempted spinner) must still see its
+	 * I/O. Costs no syscall while nothing waits on a descriptor or the thread pool. */
+	if (phasync_poller_pump(p, 0) < 0) {
+		RETURN_THROWS();
+	}
 	now = phasync_now();
 	end = seconds < 0 ? INFINITY : now + seconds;
 	next = end;
 	while (!phasync_susp_scan(ht, now, &next, 0)) {
 		zend_fiber *m;
 
-		if (seconds == 0) {
-			/* Don't wait: take what the kernel has ready now, and report that. */
-			if (phasync_poller_pump(p, 0) < 0) {
-				RETURN_THROWS();
-			}
-			next = end;
-			phasync_susp_scan(ht, phasync_now(), &next, 0);
-			break;
-		}
-		if (now >= end) {
+		if (seconds == 0 || now >= end) {
 			break;
 		}
 		if ((m = phasync_managed_top()) != NULL) {
@@ -651,7 +648,8 @@ static void phasync_susp_wait_method(INTERNAL_FUNCTION_PARAMETERS, int dir)
 		RETURN_TRUE;
 	}
 	if ((fd = phasync_stream_fd(stream)) == -1) {
-		zend_value_error("The stream has no file descriptor to wait on");
+		/* As stream_select() says it of a stream it cannot wait on (php://memory). */
+		zend_value_error("No stream arrays were passed");
 		RETURN_THROWS();
 	}
 	if (phasync_managed_top() == NULL) {
@@ -666,6 +664,33 @@ static void phasync_susp_wait_method(INTERNAL_FUNCTION_PARAMETERS, int dir)
 		RETURN_THROWS();
 	}
 	RETURN_BOOL(rc != PHASYNC_WAIT_TIMEOUT);
+}
+
+/* Suspension::suspend(): a userland blocking point. Suspends the nearest managed fiber
+ * with a Suspension that is ready at once; the loop resumes it (or throws into it) when
+ * the wait the caller stands for is over. */
+ZEND_METHOD(phasync_ext_Suspension, suspend)
+{
+	zend_fiber *m;
+	phasync_susp *s;
+	int rc;
+
+	ZEND_PARSE_PARAMETERS_NONE();
+	if ((m = phasync_managed_top()) == NULL) {
+		zend_throw_exception(spl_ce_LogicException,
+			"Suspension::suspend() must be called in a managed fiber, or in a fiber one runs", 0);
+		RETURN_THROWS();
+	}
+	if (phasync_cannot_suspend()) {
+		RETURN_THROWS();
+	}
+	s = phasync_susp_take();
+	s->state = PHASYNC_S_READY;
+	rc = phasync_susp_wait(m, s);
+	phasync_susp_retire(s);
+	if (rc == PHASYNC_WAIT_ERROR) {
+		RETURN_THROWS();
+	}
 }
 
 ZEND_METHOD(phasync_ext_Suspension, readable)

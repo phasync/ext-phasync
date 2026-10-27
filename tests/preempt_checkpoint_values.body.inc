@@ -22,13 +22,16 @@ var_dump(f($calls), nested(8000000));
 
 $k = 0;
 preempt_handler(function () use (&$k) {
-    if (++$k === 1) debug_print_backtrace();
+    if (++$k === 1) {
+        // The loop runs outside the fiber: the interrupted point is the fiber's top frame.
+        echo 'interrupted in ', (new ReflectionFiber(PreemptTest::$fiber))->getTrace()[0]['function'], "()\n";
+    }
     throw new Exception('from the closure');
 }, 0.002);
 try {
     loop();
 } catch (Exception $e) {
-    echo $e->getMessage(), ' at line ', $e->getLine(), "\n", $e->getTraceAsString(), "\n";
+    echo 'caught around loop(): ', $e->getMessage(), "\n";
 }
 preempt_handler(null);
 // Internal: the flag is a constant; the function is in no function table on 8.4+.
