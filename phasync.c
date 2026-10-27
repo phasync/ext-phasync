@@ -18,7 +18,7 @@
  */
 
 #ifdef __APPLE__
-# define _DARWIN_UNLIMITED_SELECT 1   /* select() past FD_SETSIZE (the Poller's select mode) */
+# define _DARWIN_UNLIMITED_SELECT 1   /* select() past FD_SETSIZE (the poller's select mode) */
 #endif
 #ifdef HAVE_CONFIG_H
 # include "config.h"

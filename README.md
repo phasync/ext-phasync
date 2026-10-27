@@ -18,15 +18,14 @@ prebuilt binaries. MIT, no dependencies: [the Ennerd philosophy](PHILOSOPHY.md).
 ---
 
 A PHP extension that gives [phasync](https://github.com/phasync/phasync) — and any
-fiber-based async code — an epoll `Poller` and transparent async I/O on **PHP 8.3+**,
-without patching PHP:
+fiber-based event loop — transparent async I/O on **PHP 8.3+**, without patching PHP:
 
-1. **`phasync\ext\Poller`** — waiting for streams on epoll, **not bounded by
-   `FD_SETSIZE`** (the ~1024 descriptor ceiling), for an event loop of your own.
-
-2. **Transparent async I/O via `phasync\ext\manage()`** — run a closure with
-   blocking I/O cooperatively yielding the current fiber instead of blocking the
-   process, for the dynamic extent of that closure. It covers:
+1. **`phasync\ext\Suspension`** — a loop opts its fibers in with `Suspension::manage()`.
+   A blocking call in one suspends it and throws a `Suspension` out of the
+   `start()`/`resume()` that ran it; the loop waits for its Suspensions with
+   `Suspension::poll()`, on epoll and **not bounded by `FD_SETSIZE`** (the ~1024
+   descriptor ceiling), and resumes each when it is ready. The blocking calls
+   covered:
    - `tcp://` / `unix://` / `udp://` / `udg://` sockets (incl. `fsockopen`,
      `stream_socket_client/server`), including `tcp://` connect + its DNS lookup,
      `stream_socket_accept()`, and `stream_socket_recvfrom()`/`sendto()`
@@ -59,7 +58,7 @@ without patching PHP:
      would block (each echo stays contiguous, as natively)
    - `sleep()`, `usleep()`, `time_nanosleep()`, `time_sleep_until()`
    - `flock()`, `file_put_contents(..., LOCK_EX)`, `SplFileObject::flock()` on a
-     held lock (retried without blocking, sleeping via the loop's sleep between
+     held lock (retried without blocking, sleeping in the coroutine between
      tries: 1ms, doubling to 20ms — there is no descriptor to wait on)
    - DNS: `gethostbyname()`, `gethostbynamel()`, `gethostbyaddr()`,
      `dns_get_record()`, `checkdnsrr()`/`dns_check_record()`, `getmxrr()`/`dns_get_mx()`
@@ -78,19 +77,15 @@ without patching PHP:
      `tempnam()`, `disk_free_space()`/`disk_total_space()`
      (via a thread pool; see below)
 
-   The extension performs the real I/O; on a would-block it parks the coroutine
-   through the event loop's `phasync\ext\Poller` you pass to `manage()`, whose
-   `poll()` — the loop's one blocking call, on epoll — unparks it when it may
-   continue. A `Poller` also works on its own, without `manage()`, for a loop that
-   only wants epoll-based waiting. The C side never touches the Fiber API: the loop owns all
-   suspension. This works because PHP fibers are stackful, so a suspend from
+   The extension performs the real I/O and returns PHP's own results, errors
+   and timeouts. This works because PHP fibers are stackful, so a suspend from
    inside `fread()`/`SSL_read()` unwinds and resumes correctly.
 
 ## Why
 
 PHP's `stream_select()` fails (warning + `false`) once any watched descriptor exceeds
 `FD_SETSIZE`, and PHP userland has no control over which fd number a stream gets —
-so it is unreliable for programs juggling many streams. The `Poller` waits on epoll,
+so it is unreliable for programs juggling many streams. `Suspension::poll()` waits on epoll,
 which has no such limit, and the extension adds the interception points a fiber
 scheduler needs to make `mysqli`/PDO, `fread`/`fwrite`, `proc_open` and the sleep
 functions transparently async. (The `stream_select()` limit itself is being lifted in
@@ -106,8 +101,8 @@ make test
 # load per-run in CLI:  php -d extension=modules/phasync.so your-app.php
 ```
 
-It builds for PHP 8.3 to 8.5, on Linux and macOS. `phasync_arginfo.h` is maintained by hand: never
-regenerate it with `gen_stub`.
+It builds for PHP 8.3 to 8.5, on Linux and macOS. `phasync_arginfo.h` is maintained by hand
+(`Makefile.frag` keeps make from regenerating it): never regenerate it with `gen_stub`.
 
 ## Install
 
@@ -133,21 +128,18 @@ php -d extension=/path/to/phasync.so your-app.php
 ```php
 namespace phasync\ext;
 
-final class Poller {
-    public function __construct(\Closure $getSlot,  // (): int — a slot number no one else uses
-                                \Closure $park,     // (int $slot, float $timeout) — suspend the coroutine in the slot
-                                \Closure $unpark);  // (int $slot): bool — resume it; false if the slot is vacant
-    public function poll(float $maxTime): void;     // the loop's one blocking call
-    public function readable(mixed $stream, float $timeout = PHP_FLOAT_MAX): void;
-    public function writable(mixed $stream, float $timeout = PHP_FLOAT_MAX): void;
+final class Suspension extends \Exception {
+    public static function manage(\Fiber $fiber): \Fiber;      // opt a fiber in; returns it
+    public static function poll(array $suspensions, float $seconds): array;   // the ready ones, keys kept
+    public static function readable(mixed $stream, ?float $timeout = null): bool;   // false: timed out
+    public static function writable(mixed $stream, ?float $timeout = null): bool;
+    public static function suspend(): void;                    // a blocking point for PHP code: ready at once
+    public static function setPreemptInterval(?float $seconds): void;
+    public function getScope(): \Scope;                        // the Scope current at the blocking call
+    public function isReady(): bool;
+    public function resume(): mixed;                           // as Fiber::resume()
+    public function throw(\Throwable $exception): mixed;       // cancel the blocking call
 }
-
-function manage(
-    \Closure $task,             // run with async I/O active; its return value is returned
-    Poller   $poller,           // the loop's Poller: hooked I/O waits through it
-    \Closure $sleep,            // (int $microseconds) — wait that long (a timer)
-    string   $timeoutException, // what park() throws when its $timeout ran out
-): mixed;
 
 function sapi(
     \Closure $code,             // one request; its return value is returned
@@ -157,8 +149,6 @@ function sapi(
 function run_next(string $script): void;   // CLI: run $script once more as a fresh request when this one ends
 
 function dup2(mixed $stream, int $fd): void;   // as dup2(2): $fd stays open across requests (run_next()), owned by no PHP resource
-
-function set_preempt_function(?\Closure $fn, float $minInterval = 0.1): ?\Closure;
 ```
 
 ```php
@@ -168,33 +158,57 @@ namespace phasync;
 final class Uninterruptible {}
 ```
 
-**Waiting.** A coroutine waits by parking in a slot of the event loop: the
-`Poller` calls `park($slot, $timeout)` with a slot from `getSlot()`; the loop
-suspends the coroutine and resumes it when `unpark($slot)` is called.
-`park()` and the sleep function are also called from a Fiber a coroutine runs
-itself (Drupal's renderer): suspending that Fiber would return to the
-coroutine's own code, so the loop runs in place there until the wait is over,
-and other coroutines run meanwhile (phasync's `EventLoop::wait()`). The
-`Poller` unparks **only on PHP's thread, inside `poll()`**. A stream keeps its
-epoll registration, level-triggered and left armed after a wait, and one slot
-per direction: in request/response I/O nothing arrives while the coroutine is
-busy, so a wait costs no syscall besides the batched `epoll_wait()`. An event
-that finds nobody waiting disarms its direction then and there, so unread data
-with nobody waiting costs one wake-up, never a busy loop. A wait on a regular file (always
-ready, and refused by epoll) returns at the loop's next `poll()`. Worker threads never
-call PHP — the thread-pool work
-of hooked operations (file operations, DNS) started under a `manage()` given this
-`Poller` queues the slot and writes to an eventfd in its epoll set, which `poll()`
-drains. So `poll($maxTime)` replaces the loop's `stream_select()` and idle
-`usleep()`: one `epoll_wait()` for up to `$maxTime` seconds (0 when it has work
-queued, else the time until its next timer), costing work per ready event, never
-a scan of everything registered; `poll(0)` with nothing waited on and no finished
-thread task queued returns without a syscall. A registration lives as long as its stream and is
-removed in the stream's close op. A coroutine suspended in an operation on a stream
-(`fread()`, `stream_socket_accept()`, `flock()`, a mysqli query, a read on the thread
-pool ...) that another coroutine closes has that operation fail as on a closed
-descriptor (EBADF); the close waits in its coroutine until the operation has let go
-of the stream. Closing it outside a coroutine meanwhile is a fatal error.
+**Waiting.** A loop runs its coroutines as managed fibers:
+
+```php
+use phasync\ext\Suspension;
+
+$fiber = Suspension::manage(new Fiber($task));
+try {
+    $fiber->start();
+} catch (Suspension $s) {
+    $pending[] = [$fiber, $s];       // the fiber is suspended in a blocking call
+}
+// later: wait for any of them, then resume the ready ones
+foreach (Suspension::poll(array_column($pending, 1), $untilNextTimer) as $k => $s) {
+    unset($pending[$k]);
+    try { $s->resume(); } catch (Suspension $next) { $pending[] = [$fiber, $next]; }
+}
+```
+
+`poll()` is the loop's one blocking call: it replaces the loop's
+`stream_select()` and idle `usleep()`. It waits up to `$seconds` (0: don't wait;
+negative: no limit) until one of the given Suspensions is ready, in one
+`epoll_wait()`, costing work per ready event, never a scan of everything
+registered. With none given it just waits (a loop sleeping until its next timer).
+A signal ends the wait early once its handler has run, as with `stream_select()`,
+so `poll()` may return fewer than asked for, or none: a loop polls again.
+`resume()` on a Suspension that isn't ready, or was resumed already, throws a
+`LogicException`. Outside a managed fiber every call behaves natively and no
+Suspension is thrown. `poll()` called in a managed fiber is a blocking call like
+any other, so a loop can run inside another loop's fiber.
+
+A managed fiber may run fibers of its own (a library's, Drupal's renderer): a
+blocking call in one of those suspends the nearest managed fiber, and the inner
+fiber stays where it is meanwhile (it looks running; its `resume()` throws
+`FiberError`). Resuming the managed fiber continues it.
+
+A stream keeps its epoll registration, level-triggered and left armed after a
+wait, one per direction: in request/response I/O nothing arrives while the
+coroutine is busy, so a wait costs no syscall besides the batched
+`epoll_wait()`. An event that finds nobody waiting disarms its direction then and
+there, so unread data with nobody waiting costs one wake-up, never a busy loop.
+`Suspension::readable()`/`writable()` on a regular file (always ready, and
+refused by epoll) return at the loop's next `poll()`. Worker threads never call
+PHP: the thread-pool work of hooked operations (file operations, DNS) queues its
+Suspension and writes to an eventfd in the epoll set, which `poll()` drains.
+
+A registration lives as long as its stream and is removed in the stream's close
+op. A coroutine suspended in an operation on a stream (`fread()`,
+`stream_socket_accept()`, `flock()`, a mysqli query, a read on the thread pool
+...) that another coroutine closes has that operation fail as on a closed
+descriptor (EBADF); the close waits in its coroutine until the operation has let
+go of the stream. Closing it outside a coroutine meanwhile is a fatal error.
 `socket_close()` likewise wakes a coroutine waiting on the `Socket`.
 
 A close *begun* in a coroutine that is already being destroyed (its `finally`
@@ -208,46 +222,34 @@ a coroutine still inside a query on that connection has those structures freed
 under it; this one case stays a fatal error, deliberately, rather than risk the
 memory corruption a use-after-free there would be.
 
-The loop keeps its `Poller` alive: waiters parked through a `Poller` that is freed
-are never unparked, so their waits run to their timeouts. A `Poller` belongs to the
-process that created it: after `fork()`, create a new one (using the old one
-throws). Its closures usually capture the loop that owns it; the cycle collector
-handles that.
+**Timeouts are PHP's, cancellation is the loop's.** When PHP's own call has a
+timeout (a socket's `stream_set_timeout()` or `default_socket_timeout`, counted
+per low-level wait as PHP counts it), its Suspension becomes ready when the time
+runs out, and the call finishes exactly as native PHP does on a timeout — partial
+data or `false`, `stream_get_meta_data()['timed_out']`, the notice for a
+timed-out send. Where PHP would wait forever (pipes, files, FIFOs, pool
+operations) so does the Suspension. `throw()` cancels: the exception propagates
+out of the blocking call, after the extension has disarmed the wait, ready or
+not.
 
-**Timeouts and cancellation are the loop's.** When PHP's own call has a timeout
-(a socket's `stream_set_timeout()` or `default_socket_timeout`, counted per
-low-level wait as PHP counts it — a retry gets only the remaining time), the
-extension passes it to `park()`; where PHP would wait forever (pipes, files,
-FIFOs, pool operations) it passes none (`PHP_FLOAT_MAX`). If `park()` throws
-`$timeoutException` once that time has run out, the extension finishes the call
-exactly as native PHP does on a timeout — partial data or `false`,
-`stream_get_meta_data()['timed_out']`, the notice for a timed-out send — so no
-exception escapes. Any other exception (a cancellation) propagates out of the I/O
-call unchanged, after the extension has disarmed the wait. `Poller::readable()`
-and `writable()` pass the loop's exceptions through as they are. phasync gives the
-`Poller` its loop's `getSlot`/`park`/`unpark`, and `manage()` its sleep and
-`phasync\TimeoutException::class`.
+**Suspensions are pooled.** The extension reuses one whose wait is over once
+nothing else holds it (WeakMap entries and WeakReferences to it are cleared then),
+and never buffers them as GC roots: a blocking call allocates nothing in the
+steady state. A loop that drops a pending Suspension drops its fiber with it.
 
 **The extension's safety doesn't depend on PHP code**, neither the application's
 nor the loop's. Each coroutine has a ledger, in C, of what the extension holds
-for it while it waits: its Poller registration and slot, its place among a
+for it while it waits: its registration and Suspension, its place among a
 stream's operations in flight, a pool operation, a closer's wait. The code after
 the suspension settles it; if the fiber never gets back there, its destroy
-observer does. A pool operation owns its buffer and a duplicate of its
-descriptor, so a coroutine destroyed meanwhile leaves it to its thread, which
-frees it. A slot is taken back before its coroutine is gone, so the extension
-never wakes a dead one, whatever the loop still records. A coroutine closing a
-stream others are inside an operation on waits for them, and is kept alive
-meanwhile. A coroutine destroyed while it waits (dropped, or torn down by phasync)
-thus ends its operation safely; what the operation returns is moot, since the
-fiber is unwinding. In its `finally` blocks a wait fails with the `FiberError`
-PHP throws for `Fiber::suspend()` there; pool operations run inline.
-
-`manage()` scopes are **automatic and stacking**: they apply only while `$task`
-runs, and a nested `manage()` sends hooked I/O to its own `Poller` until it
-returns. Waits only
-happen inside a coroutine (fiber); outside one, calls run as the ordinary
-blocking call.
+observer does, and request shutdown settles what a fatal error left. A pool
+operation owns its buffer and a duplicate of its descriptor, so a coroutine
+destroyed meanwhile leaves it to its thread, which frees it. A coroutine closing
+a stream others are inside an operation on waits for them, and is kept alive
+meanwhile. A coroutine destroyed while it waits thus ends its operation safely;
+what the operation returns is moot, since the fiber is unwinding. In its
+`finally` blocks a wait fails with the `FiberError` PHP throws for
+`Fiber::suspend()` there; pool operations run inline.
 
 Descriptor-backed streams are **wrapped as soon as they are created**: sockets
 from the tcp/unix/ssl transports (`stream_socket_client/server`, `fsockopen`),
@@ -255,12 +257,11 @@ from the tcp/unix/ssl transports (`stream_socket_client/server`, `fsockopen`),
 the fd-backed `php://` streams (`php://stdin|stdout|stderr`, `php://fd/N`). Streams
 that predate the hooks are swept up too — fds inherited across `ensure_loaded()`'s
 re-exec are wrapped at request start, and the `STDIN`/`STDOUT`/`STDERR` constants
-(which the CLI materialises lazily) are wrapped when the first `manage()` scope is
-entered. A wrapped stream is
-**indistinguishable from a raw one outside a `manage()` scope**: it blocks,
+(which the CLI materialises lazily) at the first `Suspension::manage()`. A wrapped
+stream is **indistinguishable from a raw one outside a managed fiber**: it blocks,
 returns `EAGAIN`, and honours `stream_set_blocking()` exactly as an unwrapped
-stream would. Only inside a scope, and only for a stream left in blocking mode,
-does a would-block park the coroutine instead of blocking the process.
+stream would. Only in a managed fiber, and only for a stream left in blocking
+mode, does a would-block suspend the coroutine instead of blocking the process.
 
 One coroutine at a time may wait on a stream in each direction: a second waiter
 gets a `LogicException`, as with phasync's own pollers.
@@ -272,8 +273,8 @@ A minimal loop on this contract is in [`tests/loop.inc`](tests/loop.inc).
 libmemcached does all its I/O on non-blocking sockets and waits in two places only:
 `poll()` and, for a host name, `getaddrinfo()`. At startup, if `libmemcached.so` is
 loaded, the extension points its own GOT entries for those two calls (Linux, x86_64
-and aarch64) at replacements: in a coroutine inside `manage()` the replacement
-parks the coroutine until a descriptor is ready (a poll over several servers, as
+and aarch64) at replacements: in a managed fiber the replacement
+suspends the coroutine until a descriptor is ready (a poll over several servers, as
 `getMulti()` makes, is one wait) or the timeout is up, and `getaddrinfo()` runs on
 the thread pool; anywhere else they are the libc calls. Nothing else changes, so
 every method and the session handler behave as without the extension, and the
@@ -290,7 +291,7 @@ one-call rule below, and cannot be from the extension; a fix belongs in php-memc
 - `memcached.sess_persistent=1` (off by default) makes the handler share one
   persistent libmemcached handle without going through a `Memcached` method, so
   concurrent coroutines can drive it at the same time and interleave on its
-  socket. `manage()` refuses to run at all (a `LogicException`) while this is
+  socket. `Suspension::manage()` refuses to run at all (a `LogicException`) while this is
   combined with `session.save_handler=memcached`, rather than let it happen
   silently.
 - The wait for a locked session (`memcached.sess_locking`, `memcached.sess_lock_wait_*`)
@@ -322,7 +323,7 @@ VFS's own. A connection opened with an explicit VFS keeps it.
 ### One call at a time per connection
 
 A connection serves one call at a time: a second command written while the first
-waits for its reply would interleave on its socket. So inside `manage()` a
+waits for its reply would interleave on its socket. So in a managed fiber a
 coroutine entering a `Memcached` handle, a PostgreSQL connection (a
 `PgSql\Connection`, its results and large objects, or the default link), a
 `SQLite3` database (its statements and results) or a pgsql or sqlite `PDO` (its
@@ -338,8 +339,8 @@ behaviour, waits still cooperative), and `phpinfo()` says so.
 Regular files and DNS lookups cannot be made non-blocking with readiness polling
 (a disk fd is always "ready"; `getaddrinfo()` blocks). Like libuv/Node, these are
 offloaded to a small worker thread pool: the worker runs only the raw syscall
-(never the Zend engine, so it is safe in a non-ZTS build) and queues the parked
-coroutine's slot for `poll()` to unpark. Workers are pooled;
+(never the Zend engine, so it is safe in a non-ZTS build) and queues the waiting
+coroutine's Suspension for `poll()` to find ready. Workers are pooled;
 the pool size is the `phasync.thread_pool_size` INI (default 8; idle workers cost
 only a lazily-paged stack, so a larger pool is cheap).
 
@@ -458,12 +459,13 @@ readable when called (a `ValueError` otherwise), and the SAPI must be the CLI (a
 afterwards, so it survives request shutdown and is there in every later `run_next()` run — the way a
 `pcntl_fork()`ed worker keeps a channel to its parent on a fixed descriptor across restarts.
 
-### Preemption: `set_preempt_function()`
+### Preemption: `Suspension::setPreemptInterval()`
 
-`set_preempt_function($fn, $minInterval)` calls `$fn` at most every
-`$minInterval` seconds (wall clock), between iterations of whatever PHP loop is
-running, so a scheduler can preempt a coroutine that never yields: `$fn` may
-call `Fiber::suspend()`, and resuming the fiber continues the loop.
+`Suspension::setPreemptInterval($seconds)` suspends a managed fiber that has run
+`$seconds` (wall clock) without suspending, between iterations of whatever PHP
+loop it is running, with a Suspension that is ready at once: the loop gets
+control back, runs its other coroutines, and resumes it, and the PHP loop goes on.
+`null` stops it.
 
 Preemption happens only between loop iterations, and not where the callback of
 a C function or the engine may not suspend (`usort()` and kin, error and output
@@ -471,7 +473,7 @@ handlers, autoloaders, magic property methods, serialization hooks,
 `preg_replace_callback()`, stream wrappers beyond plain I/O ...; the full list, with the reason for each, is in [docs/c-to-php-suspension.md](docs/c-to-php-suspension.md)), in
 destructors, in exception handlers and shutdown functions, or in
 `#[\phasync\Uninterruptible]` functions and what they call. The stack is checked down to the fiber's first
-frame (outside fibers, to the script's own code).
+frame.
 
 - Every backward jump (a loop's back-edge, a `foreach` `continue`, a backward
   `goto`) is compiled with a checkpoint before it:
@@ -482,43 +484,39 @@ frame (outside fibers, to the script's own code).
   registered per request, so opcache never folds it, and both JITs compile its
   read into loads and a compare, without a call; the call runs only when due
   and shows in no backtrace. A timer thread, not a signal, raises the flag, so
-  no syscall fails with `EINTR` and the engine's interrupts are not used. `$fn`
-  runs once, without arguments, at the next checkpoint the stack allows, the same in the
-  interpreter and both JIT modes. A backward `goto` counts as a loop: the
-  attribute is the way to make such code uninterruptible. Code without a loop
+  no syscall fails with `EINTR` and the engine's interrupts are not used. The
+  same in the interpreter and both JIT modes. A backward `goto` counts as a loop:
+  the attribute is the way to make such code uninterruptible. Code without a loop
   (straight-line code, recursion) is never interrupted, nor is code the engine
-  compiles without running extensions' compile hooks (`php -r`). A long C call delays it
-  until it returns. The interval counts from the start of the previous call.
+  compiles without running extensions' compile hooks (`php -r`). A long C call
+  delays it until it returns.
 - `#[\phasync\Uninterruptible]` is not mutual exclusion: such a function can
   still suspend (on I/O, say), and other coroutines run, and are preempted,
   meanwhile.
-- It is skipped where suspending would throw `FiberError` (pcntl signal
-  handlers, a fiber being destroyed); the next interval gets it.
-- An exception `$fn` throws surfaces at the interrupted point, in the
-  interrupted code, as a `pcntl_async_signals()` handler's does.
-- It is not re-entrant: never called while a call of it runs in the same fiber
-  (or outside any fiber). A call suspended in one fiber doesn't hold back calls
-  in others.
-- It returns the previous closure; `null` removes it and stops the thread. With
-  none set, there is no thread, and checkpoints only load the flag. Other interrupt users
-  (`pcntl_async_signals()`, `max_execution_time`) keep working.
+- It is skipped where a fiber can't switch (pcntl signal handlers, a fiber being
+  destroyed); the next interval gets it.
+- The loop may `throw()` into a preempted fiber like into any other: the
+  exception surfaces at the interrupted point.
+- With no interval set there is no thread, and checkpoints only load the flag.
+  Other interrupt users (`pcntl_async_signals()`, `max_execution_time`) keep
+  working.
 - It is per process (per thread on ZTS builds). A `fork()`ed child keeps the
-  closure and gets a timer thread of its own.
+  interval and gets a timer thread of its own.
 
 A checkpoint the stack rules reject lowers the flag; the thread raises it again
 0.25 ms later.
 
+## Status
 
+Sockets, TLS, pipes, processes, the sleep functions, DNS, files and filesystem
+calls, flock and stdio are implemented and tested. Known TLS limitations:
+read/write intent is approximated (TLS renegotiation wanting the opposite
+direction could stall — the `stream_socket_get_crypto_status()` API on 8.5+ would
+resolve it), and the TCP connect and DNS lookup inside a `tls://` connect still
+run synchronously (ext/openssl calls the socket layer directly there); the
+handshake itself cooperates.
 
-0.5 (alpha): the slot/`poll()` contract. Sockets, TLS, pipes, processes, the
-sleep functions, DNS, files and filesystem calls, flock and stdio are implemented
-and tested. Known TLS limitations: read/write intent is approximated (TLS
-renegotiation wanting the opposite direction could stall — the
-`stream_socket_get_crypto_status()` API on 8.5+ would resolve it), and the TCP
-connect and DNS lookup inside a `tls://` connect still run synchronously (ext/openssl
-calls the socket layer directly there); the handshake itself cooperates.
-
-Linux only for now (uses epoll, eventfd, `poll(2)`, `fcntl`, and POSIX threads).
+Linux (epoll, eventfd) and macOS (kqueue); POSIX threads.
 
 ## License
 

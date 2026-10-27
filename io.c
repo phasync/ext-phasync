@@ -227,7 +227,7 @@ static void phasync_hold_drop(phasync_inflight *f)
 	}
 }
 
-/* Where no coroutine is inside an op (a Poller's poll(), a manage() starting): let
+/* Where no coroutine is inside an op (Suspension::poll()): let
  * PHP have the closers held for streams nobody is inside any more. One whose loop
  * let it go is destroyed here, and its close ends as it unwinds. */
 static void phasync_holds_release(void)
@@ -393,8 +393,8 @@ static bool phasync_close_if_unwinding(php_stream *stream)
 	return true;
 }
 
-/* The hooked operations wait through the manage() scope's Poller, with its
- * timeout class. A wait on a stream fails with CLOSED if another coroutine
+/* The hooked operations wait through the request's poller, suspending the
+ * managed fiber. A wait on a stream fails with CLOSED if another coroutine
  * closes it meanwhile. There is no concurrency cap: every hooked wait goes on
  * this same cooperative path, so a stream whose readiness depends on a SIBLING
  * coroutine of the same worker can never be starved by this one. */
@@ -613,7 +613,7 @@ static ssize_t phasync_send_nowait(php_socket_t fd, const char *buf, size_t coun
 }
 
 /* The wrapped read/write ops emulate the caller's intended semantics:
- *   - outside a manage() scope                  -> exactly the native op;
+ *   - outside a managed fiber                    -> exactly the native op;
  *   - an explicitly non-blocking stream          -> exactly the native op;
  *   - a blocking stream inside a scope           -> cooperate: wait for
  *     readiness, then do ONE non-blocking attempt at the syscall, without ever
@@ -1472,15 +1472,15 @@ static int phasync_select_epoll(zval *sets[3], php_socket_t (*fd_of)(zval *, php
 
 /* ---- stream_select()/socket_select(): waking on a close mid-wait (#16) ----
  *
- * phasync_select_epoll()'s epfd is private to this call and unknown to any
- * Poller, so a watched stream's own descriptor closing -- by another
+ * phasync_select_epoll()'s epfd is private to this call and unknown to the
+ * poller, so a watched stream's own descriptor closing -- by another
  * coroutine, while we wait -- never reaches it: Linux drops a closed fd from
  * epoll silently (there is no "the peer closed its end" event when OUR OWN
  * process is the one that closed it), so without more the wait only ever
  * ends at its timeout (or never, with none).
  *
  * A close already wakes an ordinary read/write wait on that stream, through
- * its Poller registration (phasync_stream_forget() for a php_stream,
+ * its poller registration (phasync_stream_forget() for a php_stream,
  * phasync_socket_close_override() for a bare socket fd). select() gets the
  * same wake by registering each watched stream there too -- one phasync_reg
  * slot per stream, under the SAME slot number as the epfd wait, so a close

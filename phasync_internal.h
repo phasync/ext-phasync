@@ -102,7 +102,7 @@ typedef struct phasync_scope {
 struct phasync_preempt;
 
 ZEND_BEGIN_MODULE_GLOBALS(phasync)
-	struct phasync_preempt *preempt; /* set_preempt_function()'s timer, NULL = none */
+	struct phasync_preempt *preempt; /* Suspension::setPreemptInterval()'s timer, NULL = none */
 	zval *preempt_due;            /* phasync\ext\__PREEMPT_DUE's value: true = a checkpoint calls */
 	struct phasync_susp **susp;   /* the Suspension pool; an index is a wait's slot */
 	uint32_t *susp_spare;         /* indexes of retired ones, reused once only the pool holds them */
@@ -227,7 +227,7 @@ typedef struct {
 	zend_long      *queue;    /* slots of finished tasks, for poll()            */
 	size_t          len, cap;
 	int             evfd, evfd_w; /* read end, write end (the same eventfd on Linux) */
-	int             refs;     /* the Poller + each running task; under mutex    */
+	int             refs;     /* the poller + each running task; under mutex    */
 } phasync_chan;
 
 typedef struct {
@@ -254,7 +254,7 @@ typedef struct phasync_poller {
 	void         *sel_rfds, *sel_wfds;   /* malloc'd past FD_SETSIZE; bits set by hand (#define
 	                                       * below), never through libc's FORTIFY-checked FD_SET */
 	size_t        sel_cap;        /* bytes allocated for each of sel_rfds/sel_wfds */
-	struct phasync_poller *next;   /* the live Pollers (for the close hooks)     */
+	struct phasync_poller *next;   /* the live pollers (for the close hooks)     */
 	uint32_t      refs;     /* the request + each waiter (a fork()ed child's old one: its waiters) */
 } phasync_poller;
 
@@ -317,7 +317,7 @@ typedef struct phasync_task {
 	void        *arg;
 	char         path2[PATH_MAX]; /* FS rename: destination                     */
 	zend_long    slot;        /* the waiter's slot, queued for poll() when done  */
-	void        *chan;        /* its Poller's completion channel (a reference)   */
+	void        *chan;        /* its poller's completion channel (a reference)   */
 	int          done;        /* set (under the channel's mutex) once finished   */
 	int          orphaned;    /* its coroutine is gone: the thread frees it (ditto) */
 	int          ownfd;       /* its own duplicate of fd (READ/WRITE/fsync), or -1 */

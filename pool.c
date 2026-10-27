@@ -126,7 +126,7 @@ static void phasync_task_signal(phasync_task *t)
 	phasync_chan_release(ch);            /* the task's reference */
 }
 
-/* The waiter is done with its task (and lets go of the Poller): with the thread
+/* The waiter is done with its task (and lets go of the poller): with the thread
  * done, copy the results into out (NULL: drop them) and free it; otherwise orphan
  * it (a dedicated thread is cancelled: it may block forever) and fail out with
  * ECANCELED. Never waits, but for a CALL. */
@@ -191,7 +191,7 @@ static bool phasync_task_finish(phasync_task *h, phasync_poller *p, phasync_task
 	return true;
 }
 
-/* Give a task its Poller's channel (a reference, released by the thread). */
+/* Give a task its poller's channel (a reference, released by the thread). */
 static phasync_chan *phasync_task_chan(phasync_task *t, phasync_poller *p)
 {
 	phasync_chan *ch = p->chan;

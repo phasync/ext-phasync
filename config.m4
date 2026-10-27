@@ -1,6 +1,6 @@
 PHP_ARG_ENABLE([phasync],
   [whether to enable phasync support],
-  [AS_HELP_STRING([--enable-phasync], [Enable phasync (epoll/kqueue Poller + async stream hooks)])],
+  [AS_HELP_STRING([--enable-phasync], [Enable phasync (Suspension: blocking calls in fibers wait through an event loop)])],
   [no])
 
 if test "$PHP_PHASYNC" != "no"; then

@@ -1,13 +1,13 @@
 /* Included by phasync.c (single translation unit); not compiled on its own. */
 
-/* Poller object: epoll/select drivers, getSlot/park/unpark waiting, the select()/socket_select() override's shared wait path, inflight tracking. */
+/* The request's poller: epoll/select drivers, registrations, the select()/socket_select() override's shared wait path, inflight tracking. */
 
-/* ---- waiting: phasync\ext\Poller -------------------------------------------
+/* ---- waiting ---------------------------------------------------------------
  *
- * A Poller belongs to an event loop, which gives it its getSlot(), park() and
- * unpark(). A coroutine waits by parking in a fresh slot; the Poller resumes it
- * by unparking the slot, and only ever on PHP's thread, inside its poll(). A late
- * wake-up can only find a vacant slot (unpark() returns false).
+ * One poller per request (and per process after a fork()), which
+ * Suspension::poll() pumps. A coroutine waits by parking in a slot, a Suspension
+ * of the pool (suspension.c); the poller marks the slot ready, and only ever on
+ * PHP's thread, inside poll(). A late wake-up can only find a retired slot.
  *
  * A stream with a close hook keeps a level-triggered registration, armed for a
  * direction on its first wait and left armed after it: in request/response I/O
@@ -25,18 +25,17 @@
  * dropped it when the file closed; a stale one can only cause a spurious
  * wake-up). Bare descriptors get a registration for the one wait only.
  *
- * The thread tasks of the hooked operations under a manage() given this Poller
- * report to its completion channel: they queue the slot to wake and write to an
- * eventfd in the epoll set, never calling PHP; poll() drains the queue. The
- * channel is reference counted, so a task still running when its Poller is freed
- * finds a live channel. */
+ * The thread tasks of the hooked operations report to its completion channel:
+ * they queue the slot to wake and write to an eventfd in the epoll set, never
+ * calling PHP; poll() drains the queue. The channel is reference counted, so a
+ * task still running when its poller is freed finds a live channel. */
 
 
 static phasync_poller *phasync_pollers;   /* live pollers of this process */
 
 
 
-/* Bumped in every fork()ed child (pthread_atfork), so a Poller can tell it is
+/* Bumped in every fork()ed child (pthread_atfork), so a poller can tell it is
  * used from a process other than its creator without a getpid() syscall. */
 static unsigned phasync_fork_gen;
 
@@ -193,14 +192,14 @@ static void phasync_chan_purge(phasync_chan *ch, zend_long slot)
 /* ---- the ledger: what the extension holds for a suspended coroutine --------
  *
  * While a coroutine is suspended inside a hooked operation, the extension holds
- * things for it: a registration and slot in a Poller, a count in the stream's
+ * things for it: a registration and slot in the poller, a count in the stream's
  * in-flight record (#14), a pool operation, a closer's wait. Each is entered in
  * the coroutine's ledger before it suspends and struck off by the code after the
  * suspension. When PHP destroys a suspended fiber it resumes it once to unwind it,
  * and that code settles everything; whatever it never gets back to (a fatal error
  * unwinding past it) the fiber's destroy observer settles, and at the end of the
  * request whatever is left. None of it depends on PHP code (the application's
- * finally blocks, the loop's bookkeeping): a slot is taken back from the Poller
+ * finally blocks, the loop's bookkeeping): a slot is taken back from the poller
  * before its coroutine is gone, so the extension never wakes a dead one. */
 struct phasync_task;
 
@@ -216,14 +215,15 @@ static phasync_ledger *phasync_ledger_cur(void)
 	return l;
 }
 
-/* Throw unless this process created the Poller: in a fork()ed child its epoll
- * and eventfd instances are the parent's. */
+/* Throw unless this process created the poller: in a fork()ed child its epoll
+ * and eventfd instances are the parent's (phasync_proc_poller() makes the child
+ * its own, so this is a guard only). */
 static bool phasync_poller_usable(phasync_poller *p)
 {
 	if (p->fork_gen == phasync_fork_gen) {
 		return true;
 	}
-	zend_throw_error(NULL, "This Poller belongs to another process; create a new one after fork()");
+	zend_throw_error(NULL, "phasync: a poller of another process (before fork()) was used");
 	return false;
 }
 
@@ -387,7 +387,7 @@ static int phasync_reg_arm(phasync_poller *p, phasync_reg *r)
 	return phasync_reg_ctl(p, r, want, true);
 }
 
-/* Below this many watched descriptors the Poller waits with select(); at it,
+/* Below this many watched descriptors the poller waits with select(); at it,
  * it switches to epoll for the rest of the process. Measured on black: select()
  * costs ~25 ns per watched fd per call, epoll ~1 us (ADD+DEL) per connection
  * plus 87 ns per epoll_wait(). So select() wins under churn and at low counts
@@ -434,7 +434,7 @@ static void phasync_reg_drop(phasync_poller *p, phasync_reg *r)
 	zend_hash_index_del(&p->regs, (zend_ulong) r->fd);   /* frees r */
 }
 
-/* A stream is closing: deregister it (from every live Poller) before its
+/* A stream is closing: deregister it (from every live poller) before its
  * descriptor goes away, and wake whoever is parked on it (through poll(), like
  * any wake-up); their next use of the stream finds it closed. */
 static void phasync_stream_forget(php_stream *stream)
@@ -471,7 +471,7 @@ static void phasync_stream_forget(php_stream *stream)
 static bool phasync_has_close_hook(php_stream *stream);
 
 /* A wait on a registration is over (or its coroutine gone): if nobody unparked
- * it, disarm it, and let go of the Poller. The stream may have been closed
+ * it, disarm it, and let go of the poller. The stream may have been closed
  * meanwhile (its registration freed): look it up again. */
 static void phasync_wait_settle(phasync_poller *p, int idx, php_stream *stream, php_socket_t fd,
                                 zend_long slot, int dupfd)
@@ -762,7 +762,7 @@ static int phasync_wait_inline(php_socket_t fd, int dir, double timeout)
 /* Wait (in a fiber) until fd is readable or writable, or closed or failed.
  * timeout is the native timeout, INFINITY for none. Returns READY, TIMEOUT or
  * ERROR (exception pending); see phasync_park(). A regular file is always
- * ready: with via_loop (Poller::readable()/writable()) the coroutine still
+ * ready: with via_loop (Suspension::readable()/writable()) the coroutine still
  * waits for the loop's next poll(), as phasync's own wait on it does without
  * the extension (#29); hooked operations go on at once. */
 static int phasync_poller_wait(phasync_poller *p, int dir, php_stream *stream, php_socket_t fd,
@@ -945,11 +945,6 @@ static bool phasync_poller_init(phasync_poller *p)
 	return true;
 }
 
-/* The event loop's one blocking call: wait up to $maxTime seconds (0: don't
- * wait) in one epoll_wait(), then unpark the waiters of what became ready, and
- * of the hooked operations started under a manage() given this Poller whose
- * thread tasks finished. Costs per ready event, never a scan of everything
- * registered. */
 /* Grow *wake (from wake_stack to heap, or heap to bigger heap) so it holds at
  * least nwake + extra entries. Shared by the epoll and select wait paths. */
 static void phasync_wake_reserve(zend_long **wake, zend_long *wake_stack, size_t *cap, size_t nwake, size_t extra)

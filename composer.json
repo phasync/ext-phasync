@@ -1,6 +1,6 @@
 {
     "name": "phasync/ext-phasync",
-    "description": "PHP extension that makes blocking I/O (PDO, mysqli, curl, streams, sleep) wait cooperatively inside phasync coroutines, with an epoll Poller and per-coroutine requests (sapi()).",
+    "description": "PHP extension that makes blocking I/O (PDO, mysqli, curl, streams, sleep) wait cooperatively in fibers an event loop manages (phasync\\ext\\Suspension), and per-coroutine requests (sapi()).",
     "type": "php-ext",
     "license": "MIT",
     "keywords": ["phasync", "fiber", "async", "coroutine", "epoll", "extension"],
