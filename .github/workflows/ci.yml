@@ -92,9 +92,12 @@ jobs:
             TEST_PHP_ARGS="--show-diff -d extension=$D/pcov.so" make test TESTS="tests/c_invoked_pcov.phpt"
           fi
 
-      - name: phasync's suite with the extension (phasync main)
+      - name: phasync's suite with the extension (phasync's branch of the same name, else main)
         run: |
-          git clone -q --depth 1 https://github.com/phasync/phasync.git "$RUNNER_TEMP/phasync"
+          # an API change lands on both repos under one branch name: test the pair
+          BRANCH="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+          git ls-remote --exit-code --heads https://github.com/phasync/phasync.git "$BRANCH" >/dev/null || BRANCH=main
+          git clone -q --depth 1 -b "$BRANCH" https://github.com/phasync/phasync.git "$RUNNER_TEMP/phasync"
           cd "$RUNNER_TEMP/phasync"
           composer install -q --no-interaction --no-progress
           mkdir -p "$RUNNER_TEMP/ini" && echo "extension=$GITHUB_WORKSPACE/modules/phasync.so" > "$RUNNER_TEMP/ini/phasync.ini"
