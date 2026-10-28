@@ -866,6 +866,9 @@ static void phasync_req_startup(phasync_request *r)
 	phasync_req_register_server_prev = sapi_module.register_server_variables;
 	sapi_module.register_server_variables = phasync_req_register_server;
 	EG(current_execute_data) = NULL;      /* no PHP code runs yet: errors are "in Unknown on line 0" */
+	/* as at a real request's start, before the modules are activated: the parse of $_POST
+	 * runs ext/session's upload progress, which skips it otherwise (request_parse_body()) */
+	PG(modules_activated) = false;
 	zend_try {
 		if (post) {
 			sapi_read_post_data();             /* reads the body read ahead: never waits */
@@ -880,6 +883,7 @@ static void phasync_req_startup(phasync_request *r)
 	} zend_catch {
 		bailed = true;
 	} zend_end_try();
+	PG(modules_activated) = true;
 	EG(current_execute_data) = ex;
 	sapi_module.register_server_variables = phasync_req_register_server_prev;
 	PG(during_request_startup) = during;
