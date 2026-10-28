@@ -44,6 +44,9 @@
 #include "sapi.c"
 #include "keywords.c"
 #include "memo.c"
+#ifdef PHASYNC_EXP_MEMO_PROFILE
+#include "memo_profile.c"   /* experiment, never shipped */
+#endif
 
 /* Swerve's script handler (Swerve::accept()) requires an app's entry file
  * (e.g. WordPress's index.php) from inside a method, so its top-level
@@ -242,6 +245,9 @@ static PHP_MINIT_FUNCTION(phasync)
 	php_stream_stdio_ops.write = phasync_stdio_write;
 	php_stream_stdio_ops.set_option = phasync_stdio_set_option;
 	phasync_next_minit();
+#ifdef PHASYNC_EXP_MEMO_PROFILE
+	phasync_memo_profile_minit();
+#endif
 	return SUCCESS;
 }
 
@@ -309,6 +315,9 @@ static PHP_GSHUTDOWN_FUNCTION(phasync)
 
 static PHP_MSHUTDOWN_FUNCTION(phasync)
 {
+#ifdef PHASYNC_EXP_MEMO_PROFILE
+	phasync_memo_profile_mshutdown();
+#endif
 	phasync_keywords_mshutdown();
 	if (phasync_scope_bundled) {
 		scope_module_entry.module_shutdown_func(type, module_number);
@@ -416,6 +425,9 @@ static bool phasync_memcached_sessions_unsafe(void)
 
 static PHP_RINIT_FUNCTION(phasync)
 {
+#ifdef PHASYNC_EXP_MEMO_PROFILE
+	phasync_memo_profile_rinit();
+#endif
 	if (phasync_scope_bundled) {
 		scope_module_entry.request_startup_func(type, module_number);
 	}
@@ -478,6 +490,9 @@ static ZEND_MODULE_POST_ZEND_DEACTIVATE_D(phasync)
 		phasync_poller_free(phasync_pollers);
 	}
 	phasync_memo_request_end();
+#ifdef PHASYNC_EXP_MEMO_PROFILE
+	phasync_memo_profile_request_end();
+#endif
 	return SUCCESS;
 }
 
