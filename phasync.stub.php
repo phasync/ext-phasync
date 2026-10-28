@@ -152,6 +152,17 @@ function io_stats(): array {}
 function memo_stats(): array {}
 
 /**
+ * This request's phasync.gc_grace counters: 'grace_ms' (0 when off),
+ * 'collections', 'hidden' (objects whose children a collection skipped
+ * because they were younger than the grace), 'held' (of those, still
+ * waiting to age), 'rerooted' (put back in the root buffer once old) and
+ * 'scan_ns' (time spent on this bookkeeping).
+ *
+ * @return array{grace_ms: int, collections: int, hidden: int, held: int, rerooted: int, scan_ns: int}
+ */
+function gc_grace_stats(): array {}
+
+/**
  * The stat cache's counters (phasync.stat_cache; docs/stat-cache.md): 'hits' (answered without a
  * syscall), 'misses' (looked up and remembered), 'fallbacks' (not cacheable: PHP's own call),
  * 'flushes' (everything dropped: a watched directory changed, the watch cap, a queue overflow),
