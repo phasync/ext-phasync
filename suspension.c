@@ -24,6 +24,7 @@
  * Suspension::poll() marks the slots that became ready. */
 
 #include "Zend/zend_weakrefs.h"
+#include "Zend/zend_observer.h"
 
 #define PHASYNC_S_PENDING 1   /* waiting for its descriptor, timer or thread task */
 #define PHASYNC_S_READY   2   /* the fiber can be resumed */
@@ -34,6 +35,7 @@ typedef struct phasync_susp {
 	uint8_t      state;
 	bool         timed_out;   /* READY because its deadline passed */
 	bool         owned;       /* the pool holds a reference (spare, or dropped by the loop) */
+	bool         continued;   /* its resume() or throw() was called */
 	double       deadline;    /* phasync_now() clock; INFINITY: none */
 	zend_fiber  *fiber;       /* the managed fiber it suspended (a reference) */
 	zval         members;     /* a poll() of these, for an outer loop; UNDEF otherwise */
@@ -177,6 +179,7 @@ static phasync_susp *phasync_susp_take(void)
 ready:
 	s->state = PHASYNC_S_PENDING;
 	s->timed_out = false;
+	s->continued = false;
 	s->deadline = INFINITY;
 	return s;
 }
@@ -262,6 +265,47 @@ static bool phasync_susp_switch(zend_fiber *m, phasync_susp *s, zval *value)
 	return (t.flags & ZEND_FIBER_TRANSFER_FLAG_ERROR) != 0;
 }
 
+/* A cancelled wait (an exception thrown into its fiber, or the fiber destroyed) fails the
+ * hooked call the native way, but quietly: what the call would report (a warning such as
+ * "Operation canceled") is dropped while that exception is the pending one, as it is
+ * until the call has returned. Destructors, finally and catch blocks run without it
+ * pending, so their own errors are reported. The error observer, which PHP notifies
+ * before it picks a handler, steers such an error past a user error handler to
+ * zend_error_cb, which drops it. */
+static void (*phasync_error_cb_prev)(int, zend_string *, const uint32_t, zend_string *);
+
+static void phasync_cancelled_set(zend_object *e)
+{
+	if (PHASYNC_G(cancelled)) {
+		OBJ_RELEASE(PHASYNC_G(cancelled));
+	}
+	PHASYNC_G(cancelled) = e;
+	if (e) {
+		GC_ADDREF(e);   /* held, so no other exception can take its address meanwhile */
+	}
+}
+
+static void phasync_error_observer(int type, zend_string *file, uint32_t line, zend_string *message)
+{
+	(void) file; (void) line; (void) message;
+	if (PHASYNC_G(cancelled) && EG(exception) == PHASYNC_G(cancelled)
+	 && (type & (E_WARNING | E_NOTICE | E_DEPRECATED | E_CORE_WARNING | E_USER_WARNING | E_USER_NOTICE | E_USER_DEPRECATED))) {
+		PHASYNC_G(muted) = true;
+		PHASYNC_G(muted_reporting) = EG(user_error_handler_error_reporting);
+		EG(user_error_handler_error_reporting) = 0;   /* to zend_error_cb, not a user handler */
+	}
+}
+
+static void phasync_error_cb(int type, zend_string *file, const uint32_t line, zend_string *message)
+{
+	if (PHASYNC_G(muted)) {
+		PHASYNC_G(muted) = false;
+		EG(user_error_handler_error_reporting) = PHASYNC_G(muted_reporting);
+		return;
+	}
+	phasync_error_cb_prev(type, file, line, message);
+}
+
 /* Suspend until s is ready. READY; TIMEOUT once its deadline has passed; ERROR with the
  * exception pending if the loop threw into the fiber (a cancellation) or destroys it. A
  * resume() before it is ready suspends again with the same Suspension. */
@@ -299,6 +343,7 @@ static int phasync_susp_wait(zend_fiber *m, phasync_susp *s)
 	for (;;) {
 		if (phasync_susp_switch(m, s, &v)) {
 			zend_throw_exception_internal(Z_OBJ(v));
+			phasync_cancelled_set(EG(exception));
 			return PHASYNC_WAIT_ERROR;
 		}
 		zval_ptr_dtor(&v);
@@ -372,6 +417,14 @@ static phasync_poller *phasync_proc_poller(void)
 
 /* ---- Suspension::poll() -------------------------------------------------------------- */
 
+/* Ready for the loop: its wait is over. Also when the fiber was resumed or thrown into
+ * directly (Fiber::resume()/throw()) and left the wait that way: as far as the loop can
+ * tell, it was suspended and now isn't; its resume()/throw() then do nothing. */
+static zend_always_inline bool phasync_susp_ready(const phasync_susp *s)
+{
+	return s->state == PHASYNC_S_READY || (s->state == PHASYNC_S_RETIRED && !s->continued);
+}
+
 /* Mark what timed out among these (and the members of nested polls) ready; the earliest
  * remaining deadline into *next. True if any of them is ready. */
 static bool phasync_susp_scan(HashTable *ht, double now, double *next, int depth)
@@ -395,7 +448,7 @@ static bool phasync_susp_scan(HashTable *ht, double now, double *next, int depth
 				}
 			}
 		}
-		any = any || s->state == PHASYNC_S_READY;
+		any = any || phasync_susp_ready(s);
 	} ZEND_HASH_FOREACH_END();
 	return any;
 }
@@ -502,7 +555,7 @@ ZEND_METHOD(phasync_ext_Suspension, poll)
 		next = end;
 	}
 	ZEND_HASH_FOREACH_KEY_VAL(ht, h, key, zv) {
-		if (phasync_susp_from(Z_OBJ_P(zv))->state == PHASYNC_S_READY) {
+		if (phasync_susp_ready(phasync_susp_from(Z_OBJ_P(zv)))) {
 			Z_ADDREF_P(zv);
 			if (key) {
 				zend_hash_update(Z_ARRVAL_P(return_value), key, zv);
@@ -576,7 +629,7 @@ ZEND_METHOD(phasync_ext_Suspension, getScope)
 ZEND_METHOD(phasync_ext_Suspension, isReady)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	RETURN_BOOL(phasync_this_susp(ZEND_THIS)->state == PHASYNC_S_READY);
+	RETURN_BOOL(phasync_susp_ready(phasync_this_susp(ZEND_THIS)));
 }
 
 /* Resume (or throw into) the fiber it suspended, as Fiber::resume()/throw() would. */
@@ -586,6 +639,10 @@ static void phasync_susp_continue(INTERNAL_FUNCTION_PARAMETERS, zval *exception)
 	zval fiber;
 
 	if (s->state == PHASYNC_S_RETIRED || s->fiber == NULL) {
+		if (!s->continued) {
+			s->continued = true;   /* the fiber left this wait some other way: nothing to do */
+			RETURN_NULL();
+		}
 		zend_throw_exception(spl_ce_LogicException, "This Suspension was already resumed", 0);
 		RETURN_THROWS();
 	}
@@ -593,6 +650,7 @@ static void phasync_susp_continue(INTERNAL_FUNCTION_PARAMETERS, zval *exception)
 		zend_throw_exception(spl_ce_LogicException, "This Suspension is not ready", 0);
 		RETURN_THROWS();
 	}
+	s->continued = true;
 	ZVAL_OBJ_COPY(&fiber, &s->fiber->std);
 	if (exception) {
 		zend_call_method_with_1_params(Z_OBJ(fiber), zend_ce_fiber, NULL, "throw", return_value, exception);
@@ -711,6 +769,9 @@ static void phasync_suspension_minit(void)
 	phasync_suspension_handlers.free_obj = phasync_suspension_free;
 	phasync_suspension_handlers.dtor_obj = phasync_suspension_dtor;
 	phasync_suspension_handlers.clone_obj = NULL;
+	zend_observer_error_register(phasync_error_observer);
+	phasync_error_cb_prev = zend_error_cb;
+	zend_error_cb = phasync_error_cb;
 }
 
 static void phasync_suspension_rinit(void)
@@ -720,12 +781,16 @@ static void phasync_suspension_rinit(void)
 	PHASYNC_G(nsusp) = PHASYNC_G(capsusp) = PHASYNC_G(nspare) = 0;
 	PHASYNC_G(proc_poller) = NULL;
 	PHASYNC_G(managing) = false;
+	PHASYNC_G(cancelled) = NULL;
+	PHASYNC_G(muted) = false;
 	memset(&PHASYNC_G(proc_scope), 0, sizeof(PHASYNC_G(proc_scope)));
 }
 
 static void phasync_suspension_rshutdown(void)
 {
 	uint32_t n = PHASYNC_G(nsusp);
+
+	phasync_cancelled_set(NULL);
 
 	/* Fibers released here may be destroyed, unwinding through phasync_park(): retire
 	 * everything first so that touches nothing. */

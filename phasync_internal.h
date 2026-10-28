@@ -112,6 +112,9 @@ ZEND_BEGIN_MODULE_GLOBALS(phasync)
 	struct phasync_poller *proc_poller; /* the request's poller, created on first use */
 	phasync_scope proc_scope;
 	bool managing;                /* Suspension::manage() was called this request */
+	zend_object *cancelled;       /* the exception that ended the last cancelled wait (a reference) */
+	bool muted;                   /* an error is being muted: muted_reporting is to be restored */
+	int muted_reporting;          /* EG(user_error_handler_error_reporting) meanwhile */
 	php_stream_transport_factory orig_tcp;
 	php_stream_transport_factory orig_unix;
 	php_stream_transport_factory orig_udp;

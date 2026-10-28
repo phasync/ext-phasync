@@ -92,8 +92,6 @@ socket write (refcount)
   finally ran
   then write: 1
 accept (refcount)
-
-Warning: stream_socket_accept(): Accept failed: Operation canceled in %s on line %d
   finally ran
   then accept: stream
 pipe read (refcount)
@@ -108,8 +106,6 @@ socket write (gc)
   collected: yes
   then write: 1
 accept (gc)
-
-Warning: stream_socket_accept(): Accept failed: Operation canceled in %s on line %d
   finally ran
   collected: yes
   then accept: stream
