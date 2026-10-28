@@ -133,7 +133,8 @@ static HashTable *phasync_memo_array(phasync_memo_copy *c, HashTable *t, bool *d
 				copy->arData[i].key = k;
 			}
 		}
-		if (Z_TYPE_P(v) == IS_STRING || Z_TYPE_P(v) == IS_ARRAY || Z_TYPE_P(v) == IS_OBJECT) {
+		ZEND_ASSERT(Z_TYPE_P(v) <= IS_OBJECT);   /* no references or resources: the callers check */
+		if (Z_TYPE_P(v) >= IS_STRING) {
 			*deep |= phasync_memo_zval(c, d, v);
 		}
 	}
