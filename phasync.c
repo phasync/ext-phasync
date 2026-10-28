@@ -43,6 +43,7 @@
 #include "coroutine.c"
 #include "sapi.c"
 #include "keywords.c"
+#include "gc.c"
 
 /* Swerve's script handler (Swerve::accept()) requires an app's entry file
  * (e.g. WordPress's index.php) from inside a method, so its top-level
@@ -155,6 +156,7 @@ PHP_INI_BEGIN()
 		fs_offload_types, zend_phasync_globals, phasync_globals)
 	PHP_INI_ENTRY("phasync.test_unknown_layouts", "0", PHP_INI_SYSTEM, phasync_update_test_unknown_layouts)
 	PHP_INI_ENTRY("phasync.keywords", "0", PHP_INI_SYSTEM, NULL)
+	STD_PHP_INI_ENTRY("phasync.gc_grace", "0", PHP_INI_SYSTEM, OnUpdateLong, gc_grace, zend_phasync_globals, phasync_globals)
 PHP_INI_END()
 
 /* Scope: bundled fiber-interop/ext-scope (scope/scope.c, a separate translation
@@ -239,6 +241,7 @@ static PHP_MINIT_FUNCTION(phasync)
 	php_stream_stdio_ops.write = phasync_stdio_write;
 	php_stream_stdio_ops.set_option = phasync_stdio_set_option;
 	phasync_next_minit();
+	phasync_gc_minit();
 	return SUCCESS;
 }
 
@@ -259,6 +262,7 @@ static PHP_MINFO_FUNCTION(phasync)
 	} else {
 		php_info_print_table_row(2, "Scope", "provided by PHP");
 	}
+	php_info_print_table_row(2, "gc grace", phasync_gc_off_reason ? phasync_gc_off_reason : PHASYNC_G(gc_grace) ? "on (phasync.gc_grace)" : "off");
 	php_info_print_table_end();
 	DISPLAY_INI_ENTRIES();
 	if (phasync_scope_bundled) {
@@ -428,6 +432,7 @@ static PHP_RINIT_FUNCTION(phasync)
 	 * and streams that predate them get wrapped now. */
 	phasync_install_hooks();
 	phasync_req_rinit();
+	phasync_gc_rinit();
 	phasync_wrap_existing_streams(false);
 #ifdef PHASYNC_HAVE_SESSION
 	if (phasync_ps) {
@@ -459,6 +464,7 @@ static PHP_RSHUTDOWN_FUNCTION(phasync)
 		zend_hash_clean(&PHASYNC_G(ledgers));
 	}
 	phasync_suspension_rshutdown();
+	phasync_gc_rshutdown();
 	if (phasync_scope_bundled) {
 		scope_module_entry.request_shutdown_func(type, module_number);
 	}

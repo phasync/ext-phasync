@@ -484,6 +484,19 @@ readable when called (a `ValueError` otherwise), and the SAPI must be the CLI (a
 afterwards, so it survives request shutdown and is there in every later `run_next()` run — the way a
 `pcntl_fork()`ed worker keeps a channel to its parent on a fixed descriptor across restarts.
 
+### Young objects skip the cycle collector: `phasync.gc_grace`
+
+`phasync.gc_grace` (milliseconds, `php.ini` or `-d`, default `0` = off) makes
+`gc_collect_cycles()` skip the properties of objects younger than that: data a
+request just built is almost always still in use, and walking it costs the
+collection most of its time. Hiding an object's children can only make things
+look alive, so nothing live is freed; an object hidden while young is put back in
+the root buffer once it is old, so its garbage is still collected then. Age is
+counted per request (each `run_next()` run starts over), and collections in the
+request's shutdown hide nothing. The trade: cyclic garbage lives up to the grace
+period longer. With `0`, nothing is installed. `phasync\ext\gc_grace_stats()`
+returns the request's counters.
+
 ### Preemption: `Suspension::setPreemptInterval()`
 
 `Suspension::setPreemptInterval($seconds)` suspends a managed fiber that has run
