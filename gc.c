@@ -4,12 +4,13 @@
  *
  * Age: gc_stamp[handle] is the time (ms since the request started, 31 bits,
  * compared modulo 2^31) of the first collection that saw the object. Each
- * outer collection scans EG(objects_store): a slot past the previous scan's top,
- * or freed since (std free_obj marks it PHASYNC_GC_FREED), holds a new object.
+ * outer collection stamps the slots past the previous scan's top and those std
+ * free_obj marked PHASYNC_GC_FREED (listed on gc_freed) that hold an object again.
  * A slot freed by other handlers keeps its stamp: the new object looks older,
  * which only means it is not hidden. Every hidden object goes on gc_hidden once
  * (top bit of its stamp) and is put back in the root buffer when old, so its
- * garbage is still collected.
+ * garbage is still collected: the list is walked from its oldest end up to the
+ * first one still young, so one may wait up to a grace longer.
  *
  * The handlers are patched per request (RINIT to RSHUTDOWN): everything is per
  * request and in its heap, and shutdown keeps PHP's fast free path. Collections
@@ -46,10 +47,22 @@ static zend_always_inline bool phasync_gc_young(uint32_t s)
 	return s != PHASYNC_GC_FREED && ((PHASYNC_G(gc_now) - s) & 0x7fffffffu) < (uint32_t) PHASYNC_G(gc_grace);
 }
 
+static void phasync_gc_push(uint32_t **a, uint32_t *n, uint32_t *cap, uint32_t h)
+{
+	if (*n == *cap) {
+		*cap = *cap ? *cap * 2 : 256;
+		*a = safe_erealloc(*a, *cap, sizeof(uint32_t), 0);
+	}
+	(*a)[(*n)++] = h;
+}
+
 static void phasync_gc_free_obj(zend_object *object)
 {
-	if (object->handle < PHASYNC_G(gc_cap)) {
-		PHASYNC_G(gc_stamp)[object->handle] = PHASYNC_GC_FREED;
+	uint32_t h = object->handle;
+
+	if (h < PHASYNC_G(gc_cap) && PHASYNC_G(gc_stamp)[h] != PHASYNC_GC_FREED) {
+		PHASYNC_G(gc_stamp)[h] = PHASYNC_GC_FREED;
+		phasync_gc_push(&PHASYNC_G(gc_freed), &PHASYNC_G(gc_freed_n), &PHASYNC_G(gc_freed_cap), h);
 	}
 	zend_object_std_dtor(object);
 }
@@ -63,11 +76,7 @@ static HashTable *phasync_gc_get_gc(zend_object *object, zval **table, int *n)
 	}
 	if (!(s & PHASYNC_GC_HIDDEN)) {
 		PHASYNC_G(gc_stamp)[h] = s | PHASYNC_GC_HIDDEN;
-		if (PHASYNC_G(gc_hidden_n) == PHASYNC_G(gc_hidden_cap)) {
-			PHASYNC_G(gc_hidden_cap) = PHASYNC_G(gc_hidden_cap) ? PHASYNC_G(gc_hidden_cap) * 2 : 256;
-			PHASYNC_G(gc_hidden) = safe_erealloc(PHASYNC_G(gc_hidden), PHASYNC_G(gc_hidden_cap), sizeof(uint32_t), 0);
-		}
-		PHASYNC_G(gc_hidden)[PHASYNC_G(gc_hidden_n)++] = h;
+		phasync_gc_push(&PHASYNC_G(gc_hidden), &PHASYNC_G(gc_hidden_n), &PHASYNC_G(gc_hidden_cap), h);
 		PHASYNC_G(gc_st_hidden)++;
 	}
 	*table = NULL;
@@ -90,15 +99,24 @@ static void phasync_gc_scan(void)
 		}
 		PHASYNC_G(gc_cap) = cap;
 	}
-	for (uint32_t i = 1; i < top; i++) {
-		uint32_t *s = &PHASYNC_G(gc_stamp)[i];
+	uint32_t kept = 0;
 
-		if (!IS_OBJ_VALID(os->object_buckets[i])) {
-			if (i >= prev) {
-				*s = PHASYNC_GC_FREED;
-			}
-		} else if (i >= prev || *s == PHASYNC_GC_FREED) {
-			*s = PHASYNC_G(gc_now);
+	for (uint32_t k = 0; k < PHASYNC_G(gc_freed_n); k++) {
+		uint32_t h = PHASYNC_G(gc_freed)[k];
+
+		if (IS_OBJ_VALID(os->object_buckets[h])) {
+			PHASYNC_G(gc_stamp)[h] = PHASYNC_G(gc_now);
+		} else {
+			PHASYNC_G(gc_freed)[kept++] = h;
+		}
+	}
+	PHASYNC_G(gc_freed_n) = kept;
+	for (uint32_t i = MAX(prev, 1); i < top; i++) {
+		if (IS_OBJ_VALID(os->object_buckets[i])) {
+			PHASYNC_G(gc_stamp)[i] = PHASYNC_G(gc_now);
+		} else {
+			PHASYNC_G(gc_stamp)[i] = PHASYNC_GC_FREED;
+			phasync_gc_push(&PHASYNC_G(gc_freed), &PHASYNC_G(gc_freed_n), &PHASYNC_G(gc_freed_cap), i);
 		}
 	}
 	PHASYNC_G(gc_prev_top) = top;
@@ -107,10 +125,10 @@ static void phasync_gc_scan(void)
 /* Back in the root buffer: the hidden objects now old, or all of them. */
 static void phasync_gc_reroot(bool all)
 {
-	uint32_t kept = 0;
+	uint32_t i;
 
 	/* A collection gc_check_possible_root() starts appends here: re-read n */
-	for (uint32_t i = 0; i < PHASYNC_G(gc_hidden_n); i++) {
+	for (i = PHASYNC_G(gc_hidden_head); i < PHASYNC_G(gc_hidden_n); i++) {
 		uint32_t h = PHASYNC_G(gc_hidden)[i], s = PHASYNC_G(gc_stamp)[h];
 		zend_object *obj = EG(objects_store).object_buckets[h];
 
@@ -118,8 +136,7 @@ static void phasync_gc_reroot(bool all)
 			continue;   /* freed (and maybe reused) since */
 		}
 		if (!all && phasync_gc_young(s)) {
-			PHASYNC_G(gc_hidden)[kept++] = h;
-			continue;
+			break;
 		}
 		PHASYNC_G(gc_stamp)[h] = s & ~PHASYNC_GC_HIDDEN;
 		if (IS_OBJ_VALID(obj)) {
@@ -127,7 +144,15 @@ static void phasync_gc_reroot(bool all)
 			gc_check_possible_root((zend_refcounted *) obj);
 		}
 	}
-	PHASYNC_G(gc_hidden_n) = kept;
+	if (i == PHASYNC_G(gc_hidden_n)) {
+		PHASYNC_G(gc_hidden_head) = PHASYNC_G(gc_hidden_n) = 0;
+	} else if (i > PHASYNC_G(gc_hidden_n) / 2) {
+		memmove(PHASYNC_G(gc_hidden), PHASYNC_G(gc_hidden) + i, (PHASYNC_G(gc_hidden_n) - i) * sizeof(uint32_t));
+		PHASYNC_G(gc_hidden_n) -= i;
+		PHASYNC_G(gc_hidden_head) = 0;
+	} else {
+		PHASYNC_G(gc_hidden_head) = i;
+	}
 }
 
 static int phasync_gc_collect(void)
@@ -194,12 +219,15 @@ static void phasync_gc_rshutdown(void)
 	if (PHASYNC_G(gc_on)) {
 		phasync_gc_patch(zend_std_get_gc, zend_object_std_dtor);
 		PHASYNC_G(gc_on) = false;
-		efree(PHASYNC_G(gc_stamp));
+		if (PHASYNC_G(gc_stamp)) {
+			efree(PHASYNC_G(gc_stamp));
+		}
 		if (PHASYNC_G(gc_hidden)) {
 			efree(PHASYNC_G(gc_hidden));
 		}
-		PHASYNC_G(gc_stamp) = PHASYNC_G(gc_hidden) = NULL;
-		PHASYNC_G(gc_cap) = PHASYNC_G(gc_hidden_n) = PHASYNC_G(gc_hidden_cap) = 0;
+		if (PHASYNC_G(gc_freed)) {
+			efree(PHASYNC_G(gc_freed));
+		}
 	}
 }
 
@@ -211,7 +239,7 @@ ZEND_FUNCTION(phasync_ext_gc_grace_stats)
 	add_assoc_long(return_value, "grace_ms", PHASYNC_G(gc_on) ? PHASYNC_G(gc_grace) : 0);
 	add_assoc_long(return_value, "collections", (zend_long) PHASYNC_G(gc_st_collections));
 	add_assoc_long(return_value, "hidden", (zend_long) PHASYNC_G(gc_st_hidden));
-	add_assoc_long(return_value, "held", (zend_long) PHASYNC_G(gc_hidden_n));
+	add_assoc_long(return_value, "held", (zend_long) (PHASYNC_G(gc_hidden_n) - PHASYNC_G(gc_hidden_head)));
 	add_assoc_long(return_value, "rerooted", (zend_long) PHASYNC_G(gc_st_rerooted));
 	add_assoc_long(return_value, "scan_ns", (zend_long) PHASYNC_G(gc_st_ns));
 }
