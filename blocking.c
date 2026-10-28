@@ -2338,6 +2338,10 @@ static void phasync_install_hooks(void)
 		PHASYNC_G(orig_curl_multi_select) = f->handler;
 		f->handler = phasync_curl_multi_select_override;
 	}
+	if ((f = phasync_find_ifunc("curl_pause", sizeof("curl_pause") - 1))) {
+		PHASYNC_G(orig_curl_pause) = f->handler;
+		f->handler = phasync_curl_pause_override;
+	}
 	if ((f = phasync_find_ifunc("socket_connect", sizeof("socket_connect") - 1))) {
 		PHASYNC_G(orig_socket_connect) = f->handler;
 		f->handler = phasync_socket_connect_override;
@@ -2503,6 +2507,9 @@ static void phasync_restore_hooks(void)
 	}
 	if (PHASYNC_G(orig_curl_multi_select) && (f = phasync_find_ifunc("curl_multi_select", sizeof("curl_multi_select") - 1))) {
 		f->handler = PHASYNC_G(orig_curl_multi_select);
+	}
+	if (PHASYNC_G(orig_curl_pause) && (f = phasync_find_ifunc("curl_pause", sizeof("curl_pause") - 1))) {
+		f->handler = PHASYNC_G(orig_curl_pause);
 	}
 	if (PHASYNC_G(orig_socket_connect) && (f = phasync_find_ifunc("socket_connect", sizeof("socket_connect") - 1))) {
 		f->handler = PHASYNC_G(orig_socket_connect);

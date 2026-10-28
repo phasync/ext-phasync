@@ -2083,8 +2083,9 @@ static int phasync_curl_mux(void *multi, bool *complete)
 		}
 		*complete = true;
 		for (unsigned int i = 0; i < count; i++) {
-			n += phasync_mux_add(mux, fds[i].fd, (fds[i].events & 1 ? PHASYNC_EV_IN : 0)
-				| (fds[i].events & 2 ? PHASYNC_EV_PRI : 0) | (fds[i].events & 4 ? PHASYNC_EV_OUT : 0)) == 0;
+			uint32_t ev = (fds[i].events & 1 ? PHASYNC_EV_IN : 0) | (fds[i].events & 2 ? PHASYNC_EV_PRI : 0)
+				| (fds[i].events & 4 ? PHASYNC_EV_OUT : 0);
+			n += ev && phasync_mux_add(mux, fds[i].fd, ev) == 0;   /* none: a paused transfer */
 		}
 	} else {
 		fd_set r, w, e;
@@ -2147,8 +2148,12 @@ static void phasync_curl_select(zval *zmh, double timeout, zval *return_value)
 			break;                           /* activity, an error (-1), or time up */
 		}
 		if (multi && (mux = phasync_curl_mux(multi, &complete)) >= 0) {
-			/* A socket fdset() cannot show may be missing: wake as the backoff would. */
+			/* A socket fdset() cannot show may be missing: wake as the backoff would.
+			 * curl_pause() wakes it too (a paused transfer's socket is left out). */
+			phasync_ledger *l = phasync_ledger_cur();
+			l->curl_wait = true;
 			int w = phasync_wait_fd(PHASYNC_READ, NULL, mux, complete ? left : MIN(left, usec / 1e6));
+			l->curl_wait = false;
 			close(mux);
 			if (w == PHASYNC_WAIT_ERROR) {
 				ZVAL_UNDEF(&ret);
@@ -2168,6 +2173,20 @@ static void phasync_curl_select(zval *zmh, double timeout, zval *return_value)
 	if (!Z_ISUNDEF(ret)) {
 		RETURN_COPY_VALUE(&ret);
 	}
+}
+
+/* curl_pause() may unpause a transfer some coroutine's curl wait is parked
+ * over without its socket: wake those waits to probe again. */
+static ZEND_NAMED_FUNCTION(phasync_curl_pause_override)
+{
+	phasync_ledger *l;
+
+	PHASYNC_G(orig_curl_pause)(INTERNAL_FUNCTION_PARAM_PASSTHRU);
+	ZEND_HASH_FOREACH_PTR(&PHASYNC_G(ledgers), l) {
+		if (l->curl_wait && l->wait_p) {
+			phasync_unpark(l->wait_slot);
+		}
+	} ZEND_HASH_FOREACH_END();
 }
 
 static ZEND_NAMED_FUNCTION(phasync_curl_multi_select_override)

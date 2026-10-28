@@ -152,6 +152,7 @@ ZEND_BEGIN_MODULE_GLOBALS(phasync)
 	void (*orig_curl_multi_select)(INTERNAL_FUNCTION_PARAMETERS);
 	void (*orig_sem_acquire)(INTERNAL_FUNCTION_PARAMETERS);
 	void (*orig_curl_exec)(INTERNAL_FUNCTION_PARAMETERS);
+	void (*orig_curl_pause)(INTERNAL_FUNCTION_PARAMETERS);
 	void (*orig_msg_receive)(INTERNAL_FUNCTION_PARAMETERS);
 	zif_handler orig_sock[8];
 	HashTable sock_hooks;         /* (uintptr_t)function_name -> index in phasync_sock_funcs */
@@ -274,6 +275,7 @@ typedef struct {
 	phasync_poller *closing_p;
 	struct phasync_task *task;    /* a pool operation reporting to task_p (a reference) */
 	phasync_poller *task_p;
+	bool            curl_wait;    /* the wait is a curl wait (curl_pause() wakes it) */
 } phasync_ledger;
 
 typedef struct {
