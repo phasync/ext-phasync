@@ -94,13 +94,11 @@ jobs:
 
       - name: Swoole coroutine frames regression
         run: |
-          # Swoole's build asks for options; the defaults are fine
-          yes '' | pecl install -f swoole >/dev/null 2>&1 || echo "swoole unavailable for PHP ${{ matrix.php }}, skipping"
-          D=$(php-config --extension-dir)
-          if [ -f "$D/swoole.so" ]; then
-            TEST_PHP_ARGS="--show-diff -d extension=$D/swoole.so" make test TESTS="tests/swoole_coroutine_frame.phpt" | tee swoole.log
-            grep -Eq '^Tests passed +: +1 ' swoole.log
-          fi
+          # Swoole's default build needs OpenSSL and Brotli; it asks for options, the defaults are fine
+          apt-get install -y -qq libssl-dev libbrotli-dev >/dev/null
+          yes '' | pecl install -f swoole > swoole-build.log 2>&1 || { tail -20 swoole-build.log; exit 1; }
+          TEST_PHP_ARGS="--show-diff -d extension=$(php-config --extension-dir)/swoole.so" make test TESTS="tests/swoole_coroutine_frame.phpt" | tee swoole.log
+          grep -Eq '^Tests passed +: +1 ' swoole.log
 
       - name: phasync's suite with the extension (phasync's branch of the same name, else main)
         run: |
