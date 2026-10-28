@@ -463,12 +463,9 @@ static int phasync_poller_pump(phasync_poller *p, double max_time)
 
 	if (max_time <= 0 && p->armed == 0) {
 		/* Polling without waiting on every tick of a busy loop: with no descriptor waited
-		 * on and no finished thread task queued, skip the syscall. */
-		size_t queued;
-		pthread_mutex_lock(&p->chan->mutex);
-		queued = p->chan->len;
-		pthread_mutex_unlock(&p->chan->mutex);
-		if (queued == 0) {
+		 * on and no finished thread task queued, skip the syscall. Read without the lock:
+		 * a task finishing meanwhile is seen on the next tick. */
+		if (__atomic_load_n(&p->chan->len, __ATOMIC_RELAXED) == 0) {
 			return 0;
 		}
 	}
@@ -506,7 +503,7 @@ ZEND_METHOD(phasync_ext_Suspension, poll)
 		}
 	} ZEND_HASH_FOREACH_END();
 
-	array_init(return_value);
+	RETVAL_EMPTY_ARRAY();   /* the usual answer of a busy loop's poll(): nothing to allocate */
 	phasync_holds_release();   /* closers kept alive while others were inside an op on their stream */
 	if (EG(exception)) {
 		return;
@@ -520,6 +517,9 @@ ZEND_METHOD(phasync_ext_Suspension, poll)
 	 * I/O. Costs no syscall while nothing waits on a descriptor or the thread pool. */
 	if (phasync_poller_pump(p, 0) < 0) {
 		RETURN_THROWS();
+	}
+	if (seconds == 0 && zend_hash_num_elements(ht) == 0) {
+		return;   /* a busy loop's tick with nothing of its own pending */
 	}
 	now = phasync_now();
 	end = seconds < 0 ? INFINITY : now + seconds;
@@ -556,6 +556,9 @@ ZEND_METHOD(phasync_ext_Suspension, poll)
 	}
 	ZEND_HASH_FOREACH_KEY_VAL(ht, h, key, zv) {
 		if (phasync_susp_ready(phasync_susp_from(Z_OBJ_P(zv)))) {
+			if (Z_ARR_P(return_value) == &zend_empty_array) {
+				array_init(return_value);
+			}
 			Z_ADDREF_P(zv);
 			if (key) {
 				zend_hash_update(Z_ARRVAL_P(return_value), key, zv);

@@ -167,7 +167,8 @@ static void phasync_chan_push(phasync_chan *ch, zend_long slot)
 		}
 	}
 	if (ch->len < ch->cap) {
-		ch->queue[ch->len++] = slot;
+		ch->queue[ch->len] = slot;
+		__atomic_store_n(&ch->len, ch->len + 1, __ATOMIC_RELAXED);   /* read unlocked by poll()'s idle check */
 	}
 	pthread_mutex_unlock(&ch->mutex);
 	phasync_chan_signal(ch);
@@ -185,7 +186,7 @@ static void phasync_chan_purge(phasync_chan *ch, zend_long slot)
 			ch->queue[j++] = ch->queue[i];
 		}
 	}
-	ch->len = j;
+	__atomic_store_n(&ch->len, j, __ATOMIC_RELAXED);
 	pthread_mutex_unlock(&ch->mutex);
 }
 
@@ -986,7 +987,7 @@ static int phasync_poller_epoll_wait(phasync_poller *p, double max_time, zend_lo
 			phasync_wake_reserve(wake, wake_stack, cap, *nwake, ch->len);
 			memcpy(*wake + *nwake, ch->queue, ch->len * sizeof(**wake));
 			*nwake += ch->len;
-			ch->len = 0;
+			__atomic_store_n(&ch->len, 0, __ATOMIC_RELAXED);
 			pthread_mutex_unlock(&ch->mutex);
 		} else {
 			phasync_reg *r = zend_hash_index_find_ptr(&p->regs, (zend_ulong) ev[i].data.u64);
@@ -1113,7 +1114,7 @@ static int phasync_poller_select_wait(phasync_poller *p, double max_time, zend_l
 		phasync_wake_reserve(wake, wake_stack, cap, *nwake, ch->len);
 		memcpy(*wake + *nwake, ch->queue, ch->len * sizeof(**wake));
 		*nwake += ch->len;
-		ch->len = 0;
+		__atomic_store_n(&ch->len, 0, __ATOMIC_RELAXED);
 		pthread_mutex_unlock(&ch->mutex);
 	}
 	ZEND_HASH_FOREACH_PTR(&p->regs, r) {
