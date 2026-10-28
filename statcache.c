@@ -53,6 +53,7 @@ static zend_long phasync_sc_cap;
 static HashTable phasync_sc_dirs;    /* canonical directory -> its wd, or -1: not cacheable (symlink, untrusted fs, ...) */
 static HashTable phasync_sc_wds;     /* wd -> directory (zend_string) */
 static HashTable phasync_sc_recs;    /* canonical path -> phasync_sc_rec */
+static HashTable phasync_sc_inherited;   /* a fork()ed child: the parent's records, for their serials */
 static HashTable phasync_sc_alias;   /* other spelling -> canonical path (IS_STRING), or the ancestor that is missing or no directory (IS_PTR) */
 static uint64_t phasync_sc_hits, phasync_sc_misses, phasync_sc_fallbacks, phasync_sc_flushes, phasync_sc_events, phasync_sc_serial;
 
@@ -167,6 +168,16 @@ static phasync_sc_rec *phasync_sc_fill(const char *p, size_t len)
 	r->serial = ++phasync_sc_serial;
 	if (!(r->exists = lstat(p, &r->st) == 0)) {
 		memset(&r->st, 0, sizeof r->st);
+	}
+	if (zend_hash_num_elements(&phasync_sc_inherited)) {
+		phasync_sc_rec *o = zend_hash_str_find_ptr(&phasync_sc_inherited, p, len);
+		/* unchanged since the parent's lstat(): its serial, so the memo's inherited keys still match */
+		if (o && o->exists == r->exists && o->st.st_dev == r->st.st_dev && o->st.st_ino == r->st.st_ino
+		 && o->st.st_mode == r->st.st_mode && o->st.st_size == r->st.st_size
+		 && o->st.st_mtim.tv_sec == r->st.st_mtim.tv_sec && o->st.st_mtim.tv_nsec == r->st.st_mtim.tv_nsec
+		 && o->st.st_ctim.tv_sec == r->st.st_ctim.tv_sec && o->st.st_ctim.tv_nsec == r->st.st_ctim.tv_nsec) {
+			r->serial = o->serial;
+		}
 	}
 	return zend_hash_str_update_ptr(&phasync_sc_recs, p, len, r);
 }
@@ -466,10 +477,14 @@ static void phasync_sc_str_dtor(zval *zv)
 	zend_string_release(Z_TYPE_P(zv) == IS_PTR ? (zend_string *) Z_PTR_P(zv) : Z_STR_P(zv));
 }
 
-/* The child of a fork() starts empty: the fd, its owner and the watches are the parent's */
+/* The child of a fork() starts empty: the fd, its owner and the watches are the parent's. The
+ * parent's records are kept aside: one found unchanged by the child's lstat() keeps its serial. */
 static void phasync_sc_fork_child(void)
 {
 	if (phasync_sc_on) {
+		HashTable t = phasync_sc_inherited;
+		phasync_sc_inherited = phasync_sc_recs;
+		phasync_sc_recs = t;
 		phasync_sc_flush();
 	}
 }
@@ -501,6 +516,7 @@ static void phasync_sc_startup(void)
 	zend_hash_init(&phasync_sc_dirs, 256, NULL, NULL, 1);
 	zend_hash_init(&phasync_sc_wds, 256, NULL, phasync_sc_str_dtor, 1);
 	zend_hash_init(&phasync_sc_recs, 1024, NULL, phasync_sc_rec_dtor, 1);
+	zend_hash_init(&phasync_sc_inherited, 8, NULL, phasync_sc_rec_dtor, 1);
 	zend_hash_init(&phasync_sc_alias, 1024, NULL, phasync_sc_str_dtor, 1);
 	for (size_t i = 0; i < PHASYNC_SC_NFNS; i++) {
 		zend_internal_function *f = zend_hash_str_find_ptr(CG(function_table), phasync_sc_fns[i].name, strlen(phasync_sc_fns[i].name));
@@ -523,6 +539,7 @@ static void phasync_sc_shutdown(void)
 	zend_hash_destroy(&phasync_sc_dirs);
 	zend_hash_destroy(&phasync_sc_wds);
 	zend_hash_destroy(&phasync_sc_recs);
+	zend_hash_destroy(&phasync_sc_inherited);
 	zend_hash_destroy(&phasync_sc_alias);
 	signal(SIGIO, SIG_IGN);   /* one may still be on its way */
 	phasync_sc_on = false;
