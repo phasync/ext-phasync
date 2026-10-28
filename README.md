@@ -513,6 +513,19 @@ that never ends (a Swerve async worker), evicted entries are kept up to `phasync
 past that, nothing new is stored until a request ends. The memo never takes more than twice
 `phasync.memo_memory`. `memo_stats()` reports it.
 
+### Stat cache: `file_exists()`, `is_file()`, `filemtime()`, ... without a syscall (Linux)
+
+With `phasync.stat_cache=1` (`PHP_INI_SYSTEM`; default `0`), `file_exists()`, `is_file()`,
+`is_dir()`, `is_link()`, `is_readable()`, `is_writable()`, `is_executable()`, `filemtime()`,
+`filesize()`, `filectime()`, `fileperms()`, `fileinode()`, `fileowner()`, `filegroup()`,
+`filetype()`, `stat()`, `lstat()` and a failing `realpath()` answer absolute plain-file paths from
+remembered results, kept valid by inotify watches on the directories they lie in (and every one
+above); a change, by this process or another, is seen by the next call. Results are PHP's own,
+warnings and `open_basedir` included. Network and FUSE file systems, symlinked directories and
+relative paths are never cached. At most `phasync.stat_cache_watches` (default `4096`) directories
+are watched; past that, everything starts over. The memo's keys use the same results.
+`stat_cache_stats()` reports it; [docs/stat-cache.md](docs/stat-cache.md) has the design.
+
 ### Preemption: `Suspension::setPreemptInterval()`
 
 `Suspension::setPreemptInterval($seconds)` suspends a managed fiber that has run
