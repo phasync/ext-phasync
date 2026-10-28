@@ -7,14 +7,16 @@
  * drops that entry's result (and the directory's own); a change to a watched directory itself
  * (renamed, deleted, chmod'ed, replaced) or a queue overflow drops everything. Watches are added
  * with IN_DONT_FOLLOW|IN_ONLYDIR, so a watched path holds no symlink and ".." in a path is
- * resolved lexically. The inotify fd is O_ASYNC: the kernel raises SIGIO, whose handler only
- * sets a flag, as it queues an event, so a lookup costs no syscall while nothing changed and
- * sees every change queued before it, this process's own writes included. Directories on
+ * resolved lexically. A watcher thread, blocked in epoll_wait() on the inotify fd, only sets a
+ * flag as events are queued; the lookup drains them on PHP's thread, so a lookup costs no syscall
+ * while nothing changed. This process's own writes (plain-files wrapper, stdio stream ops, the
+ * mutating functions below) set phasync_sc_own, so the next lookup drains at once. Directories on
  * filesystems inotify cannot vouch for (NFS, SMB, FUSE, 9p, ...) are never cached. */
 
 #ifdef __linux__
 #include <sys/inotify.h>
 #include <sys/vfs.h>
+#include <sys/epoll.h>
 #if __has_include(<valgrind/valgrind.h>)
 # include <valgrind/valgrind.h>
 #endif
@@ -31,7 +33,7 @@ typedef struct {
 } phasync_sc_rec;
 
 enum { PHASYNC_SC_EXISTS, PHASYNC_SC_ACCESS, PHASYNC_SC_STATQ, PHASYNC_SC_STAT, PHASYNC_SC_LSTATQ, PHASYNC_SC_LSTAT,
-	PHASYNC_SC_REALPATH, PHASYNC_SC_CLEAR };
+	PHASYNC_SC_REALPATH, PHASYNC_SC_CLEAR, PHASYNC_SC_MUT };
 
 static const struct { const char *name; uint8_t q, mode; } phasync_sc_fns[] = {
 	{ "file_exists", PHASYNC_SC_EXISTS, 0 }, { "is_readable", PHASYNC_SC_ACCESS, R_OK },
@@ -42,13 +44,22 @@ static const struct { const char *name; uint8_t q, mode; } phasync_sc_fns[] = {
 	{ "filegroup", PHASYNC_SC_STAT, 0 }, { "stat", PHASYNC_SC_STAT, 0 }, { "is_link", PHASYNC_SC_LSTATQ, 0 },
 	{ "lstat", PHASYNC_SC_LSTAT, 0 }, { "filetype", PHASYNC_SC_LSTAT, 0 }, { "realpath", PHASYNC_SC_REALPATH, 0 },
 	{ "clearstatcache", PHASYNC_SC_CLEAR, 0 },
+	/* mutators that bypass the plain-files wrapper and stdio stream ops */
+	{ "chmod", PHASYNC_SC_MUT, 0 }, { "chown", PHASYNC_SC_MUT, 0 }, { "chgrp", PHASYNC_SC_MUT, 0 },
+	{ "lchown", PHASYNC_SC_MUT, 0 }, { "lchgrp", PHASYNC_SC_MUT, 0 }, { "touch", PHASYNC_SC_MUT, 0 },
+	{ "symlink", PHASYNC_SC_MUT, 0 }, { "link", PHASYNC_SC_MUT, 0 }, { "tempnam", PHASYNC_SC_MUT, 0 },
+	{ "tmpfile", PHASYNC_SC_MUT, 0 }, { "move_uploaded_file", PHASYNC_SC_MUT, 0 },
 };
 #define PHASYNC_SC_NFNS (sizeof phasync_sc_fns / sizeof phasync_sc_fns[0])
 
 static zif_handler phasync_sc_orig[PHASYNC_SC_NFNS];
-static bool phasync_sc_on, phasync_sc_untrusted, phasync_sc_valgrind;   /* valgrind delivers signals late: read every time */
-static int phasync_sc_fd = -1;
-static volatile sig_atomic_t phasync_sc_dirty;
+static bool phasync_sc_on, phasync_sc_untrusted, phasync_sc_valgrind;   /* valgrind schedules the watcher late: read every time */
+static int phasync_sc_fd = -1, phasync_sc_ep = -1;   /* inotify; the watcher's epoll set */
+static int phasync_sc_dirty;      /* set by the watcher thread (atomic) */
+static pthread_t phasync_sc_thread;
+static bool phasync_sc_thread_on;
+static php_stream_wrapper_ops phasync_sc_wops;
+static const php_stream_wrapper_ops *phasync_sc_wops_orig;
 static zend_long phasync_sc_cap;
 static HashTable phasync_sc_dirs;    /* canonical directory -> its wd, or -1: not cacheable (symlink, untrusted fs, ...) */
 static HashTable phasync_sc_wds;     /* wd -> directory (zend_string) */
@@ -57,10 +68,17 @@ static HashTable phasync_sc_inherited;   /* a fork()ed child: the parent's recor
 static HashTable phasync_sc_alias;   /* other spelling -> canonical path (IS_STRING), or the ancestor that is missing or no directory (IS_PTR) */
 static uint64_t phasync_sc_hits, phasync_sc_misses, phasync_sc_fallbacks, phasync_sc_flushes, phasync_sc_events, phasync_sc_serial;
 
-static void phasync_sc_sigio(int sig)
+/* The watcher: never touches PHP state; signals stay blocked here */
+static void *phasync_sc_watch(void *arg)
 {
-	(void) sig;
-	phasync_sc_dirty = 1;
+	struct epoll_event ev;
+
+	for (;;) {
+		if (epoll_wait((int) (intptr_t) arg, &ev, 1, -1) > 0) {
+			__atomic_store_n(&phasync_sc_dirty, 1, __ATOMIC_RELEASE);
+		}
+	}
+	return NULL;
 }
 
 static void phasync_sc_flush(void)
@@ -112,7 +130,8 @@ static void phasync_sc_drain(void)
 	char buf[8192] __attribute__((aligned(__alignof__(struct inotify_event))));
 	ssize_t n;
 
-	phasync_sc_dirty = 0;
+	__atomic_store_n(&phasync_sc_dirty, 0, __ATOMIC_RELAXED);
+	phasync_sc_own = false;
 	while (phasync_sc_fd >= 0) {
 		if ((n = read(phasync_sc_fd, buf, sizeof buf)) <= 0) {
 			if (n < 0 && errno == EINTR) {
@@ -184,14 +203,33 @@ static phasync_sc_rec *phasync_sc_fill(const char *p, size_t len)
 
 static bool phasync_sc_init(void)
 {
-	struct f_owner_ex owner = { F_OWNER_TID, (pid_t) syscall(SYS_gettid) };
+	struct epoll_event ev = { .events = EPOLLIN | EPOLLET };
 
+	if (!phasync_sc_thread_on) {
+		sigset_t all, old;
+		int e;
+
+		if (phasync_sc_ep < 0 && (phasync_sc_ep = epoll_create1(EPOLL_CLOEXEC)) < 0) {
+			phasync_sc_on = false;
+			return false;
+		}
+		sigfillset(&all);
+		pthread_sigmask(SIG_SETMASK, &all, &old);
+		e = pthread_create(&phasync_sc_thread, NULL, phasync_sc_watch, (void *) (intptr_t) phasync_sc_ep);
+		pthread_sigmask(SIG_SETMASK, &old, NULL);
+		if (e) {
+			phasync_sc_on = false;
+			return false;
+		}
+		phasync_sc_thread_on = true;
+	}
 	if ((phasync_sc_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC)) < 0) {
 		phasync_sc_on = false;   /* max_user_instances */
 		return false;
 	}
-	fcntl(phasync_sc_fd, F_SETOWN_EX, &owner);
-	fcntl(phasync_sc_fd, F_SETFL, O_NONBLOCK | O_ASYNC);
+	/* closing the fd removes it from the set; a copy held by a fork()ed child until exec()
+	 * only leaves spurious wakeups behind */
+	epoll_ctl(phasync_sc_ep, EPOLL_CTL_ADD, phasync_sc_fd, &ev);
 	return true;
 }
 
@@ -309,7 +347,7 @@ static int phasync_sc_get(zend_string *path, phasync_sc_rec **rec)
 	zval *a;
 	int r;
 
-	if (UNEXPECTED(phasync_sc_dirty || phasync_sc_valgrind)) {
+	if (UNEXPECTED(__atomic_load_n(&phasync_sc_dirty, __ATOMIC_ACQUIRE) | phasync_sc_own | phasync_sc_valgrind)) {
 		phasync_sc_drain();
 	}
 	if ((*rec = zend_hash_find_ptr(&phasync_sc_recs, path))) {
@@ -387,6 +425,10 @@ static void phasync_sc_call(INTERNAL_FUNCTION_PARAMETERS, int i)
 	bool fail;
 	int r;
 
+	if (q == PHASYNC_SC_MUT) {
+		phasync_sc_own = true;   /* before: a bailout leaves it set, which costs one drain */
+		goto orig;
+	}
 	if (q == PHASYNC_SC_CLEAR) {
 		phasync_sc_orig[i](INTERNAL_FUNCTION_PARAM_PASSTHRU);
 		if (phasync_sc_on) {
@@ -463,9 +505,13 @@ orig:
 PHASYNC_SC_FN(0) PHASYNC_SC_FN(1) PHASYNC_SC_FN(2) PHASYNC_SC_FN(3) PHASYNC_SC_FN(4) PHASYNC_SC_FN(5) PHASYNC_SC_FN(6)
 PHASYNC_SC_FN(7) PHASYNC_SC_FN(8) PHASYNC_SC_FN(9) PHASYNC_SC_FN(10) PHASYNC_SC_FN(11) PHASYNC_SC_FN(12) PHASYNC_SC_FN(13)
 PHASYNC_SC_FN(14) PHASYNC_SC_FN(15) PHASYNC_SC_FN(16) PHASYNC_SC_FN(17) PHASYNC_SC_FN(18) PHASYNC_SC_FN(19)
+PHASYNC_SC_FN(20) PHASYNC_SC_FN(21) PHASYNC_SC_FN(22) PHASYNC_SC_FN(23) PHASYNC_SC_FN(24) PHASYNC_SC_FN(25)
+PHASYNC_SC_FN(26) PHASYNC_SC_FN(27) PHASYNC_SC_FN(28) PHASYNC_SC_FN(29) PHASYNC_SC_FN(30)
 static const zif_handler phasync_sc_mine[PHASYNC_SC_NFNS] = { phasync_sc_fn0, phasync_sc_fn1, phasync_sc_fn2, phasync_sc_fn3,
 	phasync_sc_fn4, phasync_sc_fn5, phasync_sc_fn6, phasync_sc_fn7, phasync_sc_fn8, phasync_sc_fn9, phasync_sc_fn10, phasync_sc_fn11,
-	phasync_sc_fn12, phasync_sc_fn13, phasync_sc_fn14, phasync_sc_fn15, phasync_sc_fn16, phasync_sc_fn17, phasync_sc_fn18, phasync_sc_fn19 };
+	phasync_sc_fn12, phasync_sc_fn13, phasync_sc_fn14, phasync_sc_fn15, phasync_sc_fn16, phasync_sc_fn17, phasync_sc_fn18, phasync_sc_fn19,
+	phasync_sc_fn20, phasync_sc_fn21, phasync_sc_fn22, phasync_sc_fn23, phasync_sc_fn24, phasync_sc_fn25, phasync_sc_fn26,
+	phasync_sc_fn27, phasync_sc_fn28, phasync_sc_fn29, phasync_sc_fn30 };
 
 static void phasync_sc_rec_dtor(zval *zv)
 {
@@ -477,11 +523,53 @@ static void phasync_sc_str_dtor(zval *zv)
 	zend_string_release(Z_TYPE_P(zv) == IS_PTR ? (zend_string *) Z_PTR_P(zv) : Z_STR_P(zv));
 }
 
-/* The child of a fork() starts empty: the fd, its owner and the watches are the parent's. The
- * parent's records are kept aside: one found unchanged by the child's lstat() keeps its serial. */
+/* Own mutations through the plain-files wrapper: the next lookup drains */
+static int phasync_sc_unlink(php_stream_wrapper *w, const char *u, int o, php_stream_context *c)
+{
+	phasync_sc_own = true;
+	return phasync_sc_wops_orig->unlink(w, u, o, c);
+}
+static int phasync_sc_rename(php_stream_wrapper *w, const char *f, const char *t, int o, php_stream_context *c)
+{
+	phasync_sc_own = true;
+	return phasync_sc_wops_orig->rename(w, f, t, o, c);
+}
+static int phasync_sc_mkdir(php_stream_wrapper *w, const char *u, int m, int o, php_stream_context *c)
+{
+	phasync_sc_own = true;
+	return phasync_sc_wops_orig->stream_mkdir(w, u, m, o, c);
+}
+static int phasync_sc_rmdir(php_stream_wrapper *w, const char *u, int o, php_stream_context *c)
+{
+	phasync_sc_own = true;
+	return phasync_sc_wops_orig->stream_rmdir(w, u, o, c);
+}
+static int phasync_sc_metadata(php_stream_wrapper *w, const char *u, int op, void *v, php_stream_context *c)
+{
+	phasync_sc_own = true;
+	return phasync_sc_wops_orig->stream_metadata(w, u, op, v, c);
+}
+static php_stream *phasync_sc_open(php_stream_wrapper *w, const char *f, const char *m, int o,
+	zend_string **op, php_stream_context *c STREAMS_DC)
+{
+	if (strpbrk(m, "waxc+")) {
+		phasync_sc_own = true;   /* may create the file */
+	}
+	return phasync_sc_wops_orig->stream_opener(w, f, m, o, op, c STREAMS_REL_CC);
+}
+
+/* The child of a fork() starts empty: the fd and the watches are the parent's, the watcher thread
+ * is not there. The parent's records are kept aside: one found unchanged by the child's lstat()
+ * keeps its serial. */
 static void phasync_sc_fork_child(void)
 {
 	if (phasync_sc_on) {
+		if (phasync_sc_ep >= 0) {
+			close(phasync_sc_ep);
+			phasync_sc_ep = -1;
+		}
+		phasync_sc_thread_on = false;
+		phasync_sc_dirty = 0;
 		HashTable t = phasync_sc_inherited;
 		phasync_sc_inherited = phasync_sc_recs;
 		phasync_sc_recs = t;
@@ -492,22 +580,14 @@ static void phasync_sc_fork_child(void)
 /* MINIT: take over the functions; phasync.stat_cache=0 (the default) leaves them alone */
 static void phasync_sc_startup(void)
 {
-	struct sigaction sa, old;
-
-	if (!INI_BOOL("phasync.stat_cache") || sigaction(SIGIO, NULL, &old) != 0
-	 || (old.sa_handler != SIG_DFL && old.sa_handler != SIG_IGN)) {
-		return;   /* SIGIO is someone else's */
+	if (!INI_BOOL("phasync.stat_cache")) {
+		return;
 	}
 	for (size_t i = 0; i < PHASYNC_SC_NFNS; i++) {
 		if (!zend_hash_str_find_ptr(CG(function_table), phasync_sc_fns[i].name, strlen(phasync_sc_fns[i].name))) {
 			return;
 		}
 	}
-	memset(&sa, 0, sizeof sa);
-	sa.sa_handler = phasync_sc_sigio;
-	sa.sa_flags = SA_RESTART;
-	sigemptyset(&sa.sa_mask);
-	sigaction(SIGIO, &sa, NULL);
 	phasync_sc_cap = INI_INT("phasync.stat_cache_watches");
 	phasync_sc_untrusted = INI_BOOL("phasync.test_stat_cache_untrusted");
 #ifdef RUNNING_ON_VALGRIND
@@ -523,6 +603,15 @@ static void phasync_sc_startup(void)
 		phasync_sc_orig[i] = f->handler;
 		f->handler = phasync_sc_mine[i];
 	}
+	phasync_sc_wops_orig = php_plain_files_wrapper.wops;
+	phasync_sc_wops = *phasync_sc_wops_orig;
+	phasync_sc_wops.stream_opener = phasync_sc_open;
+	phasync_sc_wops.unlink = phasync_sc_unlink;
+	phasync_sc_wops.rename = phasync_sc_rename;
+	phasync_sc_wops.stream_mkdir = phasync_sc_mkdir;
+	phasync_sc_wops.stream_rmdir = phasync_sc_rmdir;
+	phasync_sc_wops.stream_metadata = phasync_sc_metadata;
+	php_plain_files_wrapper.wops = &phasync_sc_wops;
 	pthread_atfork(NULL, NULL, phasync_sc_fork_child);
 	phasync_sc_on = true;
 }
@@ -535,13 +624,22 @@ static void phasync_sc_shutdown(void)
 	for (size_t i = 0; i < PHASYNC_SC_NFNS; i++) {
 		((zend_internal_function *) zend_hash_str_find_ptr(CG(function_table), phasync_sc_fns[i].name, strlen(phasync_sc_fns[i].name)))->handler = phasync_sc_orig[i];
 	}
+	php_plain_files_wrapper.wops = phasync_sc_wops_orig;
+	if (phasync_sc_thread_on) {
+		pthread_cancel(phasync_sc_thread);
+		pthread_join(phasync_sc_thread, NULL);
+		phasync_sc_thread_on = false;
+	}
+	if (phasync_sc_ep >= 0) {
+		close(phasync_sc_ep);
+		phasync_sc_ep = -1;
+	}
 	phasync_sc_flush();
 	zend_hash_destroy(&phasync_sc_dirs);
 	zend_hash_destroy(&phasync_sc_wds);
 	zend_hash_destroy(&phasync_sc_recs);
 	zend_hash_destroy(&phasync_sc_inherited);
 	zend_hash_destroy(&phasync_sc_alias);
-	signal(SIGIO, SIG_IGN);   /* one may still be on its way */
 	phasync_sc_on = false;
 }
 #else

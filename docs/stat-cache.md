@@ -46,21 +46,29 @@ own on create/delete/move). If `D/N` is a directory we watch (or chose not to ca
 the event is about `D` itself, or the queue overflowed, everything is dropped: the fd is closed
 (removing all watches at once) and the tables cleared.
 
-**Delivery.** The fd is `O_ASYNC`, owned by the main thread (`F_SETOWN_EX`/`F_OWNER_TID`); the
-kernel raises `SIGIO` as it queues an event, and the handler sets a flag. A lookup reads the flag;
-when set, it drains the fd (non-blocking reads) before answering. So:
+**Delivery.** One watcher thread per process, started with the first watch, blocks in
+`epoll_wait()` on an epoll set holding the inotify fd (edge-triggered) and only sets an atomic flag
+as the kernel queues an event; it never touches PHP state, and all signals are blocked in it. A
+lookup reads the flag; when set, it drains the fd (non-blocking reads) and applies the events on
+PHP's thread before answering. The epoll set outlives the inotify fd: a flush closes the fd, which
+leaves the set by itself, and the next fd is added. A `fork()`ed child has no watcher: it closes the
+inherited epoll fd and starts its own on first use. MSHUTDOWN cancels and joins the thread. So:
 
-- a hit costs no syscall;
-- another process's change is seen once the kernel has queued the event and signalled us
-  (delivery on the next return to user space; an IPI if we are running elsewhere: microseconds);
-- this process's own writes, through any PHP function or stream, are seen at once: the signal is
-  pending when the writing syscall returns. Hooking `fopen()`/`file_put_contents()`/`unlink()`/...
-  was the alternative; it would miss `fwrite()` on an open stream, `SplFileObject`, `ZipArchive`,
-  extensions. Not needed.
+- a hit costs no syscall and no signal ever interrupts the process (SIGIO did: `EINTR` from
+  `select()` in a loop, early `usleep()`);
+- another process's change is seen once the watcher has woken (microseconds after the kernel
+  queued the event);
+- this process's own writes are seen at once: they set `phasync_sc_own`, and the next lookup drains
+  whether or not the watcher has woken. Hooked: the plain-files wrapper (`stream_opener` in a
+  writing mode, `unlink`, `rename`, `mkdir`, `rmdir`, `metadata`), `php_stream_stdio_ops` (`write`,
+  `close` of a writing stream, truncate; this covers `fwrite()`, `file_put_contents()`, `copy()`,
+  `SplFileObject`) and the functions that bypass both (`chmod`, `chown`, `chgrp`, `lchown`,
+  `lchgrp`, `touch`, `symlink`, `link`, `tempnam`, `tmpfile`, `move_uploaded_file`). C code writing
+  without PHP streams (libzip, sqlite, session files) is seen like another process's change.
 
-The fd is not registered with the poller, and `run_next()` does not drain it: the flag already says
-when there is something to read, and events wait in the kernel queue meanwhile (overflow drops
-everything). Under valgrind (which delivers signals late) every lookup drains.
+The fd is not registered with the poller, and `run_next()` does not drain it: events wait in the
+kernel queue meanwhile (overflow drops everything). Under valgrind (which schedules the watcher
+late) every lookup drains.
 
 Options measured, per `file_exists()` hit (PHP 8.5, JIT, pinned):
 
@@ -68,7 +76,8 @@ Options measured, per `file_exists()` hit (PHP 8.5, JIT, pinned):
 |---|---|
 | none (cache off): `access()` | 1,770 |
 | non-blocking `read()` of the inotify fd every hit | 950 |
-| SIGIO flag (built) | 250 |
+| SIGIO flag (previous design) | 250 |
+| watcher-thread flag (built) | 170 |
 
 `is_file()`/`filemtime()` pairs: 4,500 off, 2,000 with a read per hit, 590 with the flag.
 
@@ -99,11 +108,7 @@ compile it out. `phasync.test_stat_cache_untrusted=1` makes every filesystem unt
 
 **Limits.** At most `phasync.stat_cache_watches` (default 4096) watches and 65,536 results +
 spellings; reaching either drops everything and starts over (a working set larger than the cap
-thrashes: then raise it). A `fork()`ed child starts empty (it must not read its parent's fd). A
-SIGIO handler installed before MINIT turns the cache off; one installed later (`pcntl_signal(SIGIO)`)
-or SIGIO blocked by the application would leave results stale. Interrupted `nanosleep()`/`poll()`
-return early on a signal even with `SA_RESTART`: native `usleep()` outside a phasync scope can end
-early when a watched directory changes. `setuid()` after results were cached is not noticed.
+thrashes: then raise it). A `fork()`ed child starts empty (it must not read its parent's fd). `setuid()` after results were cached is not noticed.
 `SplFileInfo` methods call `php_stat()` directly and are not cached (Laravel's config loading and
 session GC go through Symfony Finder).
 
@@ -165,7 +170,7 @@ Proposal: the ext owns it, Swerve only calls it.
 - **Hit in a worker:** result valid iff `epoch` and its `gen` slot (and, for a directory, its
   `wd` slot) still hold the values recorded at fill time: two relaxed loads, no syscall, no signal.
   A collision only causes a miss.
-- **Delivery:** `F_SETOWN` to the negative process group: every worker gets SIGIO as an event is
+- **Delivery:** every worker's watcher thread polls the shared fd and sets its flag as an event is
   queued. A worker with the flag set drains the fd under a shared spinlock (seqlock-style
   `draining` counter in the region); a worker that finds the queue empty while another drains
   waits for `draining` to settle before trusting its counters. The master drains in its loop too,
@@ -175,6 +180,5 @@ Proposal: the ext owns it, Swerve only calls it.
   fd to workers on their next `run_next()`).
 
 Interface for Swerve: one call in the master before the first fork, under the same INI switch;
-nothing else changes. Open questions: whether the process-group SIGIO also reaches Swerve's
-WebSocket workers (harmless: they just set a flag), and fd inheritance across Swerve's reload
+nothing else changes. Open question: fd inheritance across Swerve's reload
 (`--watch` restart re-forks from the master: the region and fd survive).
