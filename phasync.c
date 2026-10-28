@@ -178,6 +178,14 @@ static bool phasync_scope_elsewhere(void)
 
 static PHP_MINIT_FUNCTION(phasync)
 {
+	/* dl() or FPM's php_admin_value[extension]: after startup, too late for the
+	 * observers, the zend_extension and the hooks MINIT installs (issue #9) */
+	if (php_get_module_initialized()) {
+		EG(current_module)->module_started = 0;   /* no MSHUTDOWN for what never started */
+		zend_error(E_CORE_ERROR, "phasync cannot be loaded after startup (dl() or php_admin_value[extension]); "
+			"load it with extension=phasync.so in php.ini, or with -d extension= on the php/php-fpm command line");
+		return FAILURE;
+	}
 	REGISTER_INI_ENTRIES();
 	if (INI_BOOL("phasync.keywords")) {
 		phasync_keywords_minit();
