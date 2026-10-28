@@ -2031,25 +2031,84 @@ static ZEND_NAMED_FUNCTION(phasync_socket_connect_override)
 	RETURN_FALSE;
 }
 
-/* curl_multi_select() waits for curl's own sockets, which PHP doesn't expose
- * (no curl_multi_fdset()). Inside a scope, in a fiber: probe the original with a
- * zero timeout, and sleep through the loop between probes (1ms, doubling to
- * 20ms) until activity or the caller's timeout; 0 on timeout, as natively. The
- * probe calls the function again by name, which (select_depth > 0) goes
- * straight to the original. */
+/* curl_multi_select() waits for curl's own sockets, which PHP doesn't expose.
+ * Inside a scope, in a fiber: probe the original with a zero timeout, and until
+ * activity or the timeout (capped by curl's own timer, as curl_multi_wait() caps
+ * it) park on curl's sockets, found through libcurl itself: ext/curl links it, we
+ * resolve it at runtime. The CURLM* is php_curlm's first field. With no socket to
+ * wait on (none yet, or none curl_multi_fdset() can show), sleep between probes
+ * (1ms, doubling to 20ms). The probe calls the function again by name, which
+ * (select_depth > 0) goes straight to the original. */
+typedef struct { int fd; short events; short revents; } phasync_curl_waitfd;
+static int (*phasync_curlm_waitfds)(void *, phasync_curl_waitfd *, unsigned int, unsigned int *);   /* 8.8+ */
+static int (*phasync_curlm_fdset)(void *, fd_set *, fd_set *, fd_set *, int *);
+static int (*phasync_curlm_timeout)(void *, long *);
+
+/* A mux fd watching curl's sockets, or -1 if there are none. */
+static int phasync_curl_mux(void *multi)
+{
+	int mux = -1, n = 0;
+
+	if (phasync_curlm_waitfds) {
+		phasync_curl_waitfd fds[64];
+		unsigned int count = 0;
+		if (phasync_curlm_waitfds(multi, fds, 64, &count) != 0 || count == 0 || (mux = phasync_mux_open()) < 0) {
+			return -1;
+		}
+		for (unsigned int i = 0; i < count; i++) {
+			n += phasync_mux_add(mux, fds[i].fd, (fds[i].events & 1 ? PHASYNC_EV_IN : 0)
+				| (fds[i].events & 2 ? PHASYNC_EV_PRI : 0) | (fds[i].events & 4 ? PHASYNC_EV_OUT : 0)) == 0;
+		}
+	} else {
+		fd_set r, w, e;
+		int max = -1;
+		FD_ZERO(&r); FD_ZERO(&w); FD_ZERO(&e);
+		if (phasync_curlm_fdset(multi, &r, &w, &e, &max) != 0 || max < 0 || (mux = phasync_mux_open()) < 0) {
+			return -1;
+		}
+		for (int fd = 0; fd <= max; fd++) {
+			uint32_t ev = (FD_ISSET(fd, &r) ? PHASYNC_EV_IN : 0) | (FD_ISSET(fd, &w) ? PHASYNC_EV_OUT : 0)
+				| (FD_ISSET(fd, &e) ? PHASYNC_EV_PRI : 0);
+			n += ev && phasync_mux_add(mux, fd, ev) == 0;
+		}
+	}
+	if (n == 0) {
+		close(mux);
+		mux = -1;
+	}
+	return mux;
+}
+
 /* The cooperative wait itself; also curl_exec()'s, called directly (its own
  * frame would make the by-name call look like C calling PHP). */
 static void phasync_curl_select(zval *zmh, double timeout, zval *return_value)
 {
+	static bool resolved;
 	double deadline = phasync_now() + timeout;
 	zend_long usec = 1000;
 	zval fn, args[2], ret;
+	void *multi = NULL;
+	long ms;
 
+	if (!resolved) {
+		resolved = true;
+		phasync_curlm_waitfds = (int (*)(void *, phasync_curl_waitfd *, unsigned int, unsigned int *)) dlsym(RTLD_DEFAULT, "curl_multi_waitfds");
+		phasync_curlm_fdset = (int (*)(void *, fd_set *, fd_set *, fd_set *, int *)) dlsym(RTLD_DEFAULT, "curl_multi_fdset");
+		phasync_curlm_timeout = (int (*)(void *, long *)) dlsym(RTLD_DEFAULT, "curl_multi_timeout");
+	}
+	if (phasync_curlm_fdset && phasync_curlm_timeout && Z_TYPE_P(zmh) == IS_OBJECT
+	 && zend_string_equals_literal(Z_OBJCE_P(zmh)->name, "CurlMultiHandle")) {
+		multi = *(void **) ((char *) Z_OBJ_P(zmh) - Z_OBJ_P(zmh)->handlers->offset);
+		if (phasync_curlm_timeout(multi, &ms) == 0 && ms >= 0 && ms < timeout * 1000) {
+			deadline = phasync_now() + ms / 1000.0;
+		}
+	}
 	ZVAL_STRING(&fn, "curl_multi_select");
 	ZVAL_COPY(&args[0], zmh);
 	ZVAL_DOUBLE(&args[1], 0.0);
 	for (;;) {
 		double left;
+		int mux;
 		ZVAL_UNDEF(&ret);
 		PHASYNC_G(select_depth)++;
 		call_user_function(NULL, NULL, &fn, &ret, 2, args);
@@ -2058,7 +2117,15 @@ static void phasync_curl_select(zval *zmh, double timeout, zval *return_value)
 		 || (left = deadline - phasync_now()) <= 0) {
 			break;                           /* activity, an error (-1), or time up */
 		}
-		zval_ptr_dtor(&ret);
+		if (multi && (mux = phasync_curl_mux(multi)) >= 0) {
+			int w = phasync_wait_fd(PHASYNC_READ, NULL, mux, left);
+			close(mux);
+			if (w == PHASYNC_WAIT_ERROR) {
+				ZVAL_UNDEF(&ret);
+				break;                       /* exception pending */
+			}
+			continue;
+		}
 		if (phasync_call_sleep(MIN(usec, (zend_long) (left * 1e6) + 1)) < 0) {
 			ZVAL_UNDEF(&ret);
 			break;                           /* exception pending */
