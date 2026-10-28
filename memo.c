@@ -40,6 +40,7 @@ typedef struct {
 	off_t size;
 	struct timespec mtime, ctime;
 	zend_long offset, length;   /* what was read: from offset, length bytes (-1: to the end) */
+	uint64_t serial;            /* the stat cache's (statcache.c), 0 without it */
 } phasync_memo_file_key;
 
 /* Copying a request value into a block: run once to size the block (mem NULL), then to fill it */
@@ -429,11 +430,13 @@ static ZEND_NAMED_FUNCTION(phasync_memo_json_decode)
 static bool phasync_memo_file_stat(const char *path, phasync_memo_file_key *key)
 {
 	struct stat st;
+	uint64_t serial;
 
-	if (stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size > PHASYNC_MEMO_MAX_FILE) {
+	if (phasync_sc_stat(path, &st, &serial) != 0 || !S_ISREG(st.st_mode) || st.st_size > PHASYNC_MEMO_MAX_FILE) {
 		return false;
 	}
 	memset(key, 0, sizeof *key);   /* compared as bytes: no padding left undefined */
+	key->serial = serial;
 	key->dev = st.st_dev;
 	key->ino = st.st_ino;
 	key->size = st.st_size;
@@ -536,13 +539,15 @@ static bool phasync_memo_dev_listable(dev_t dev, const char *dir)
 static zend_string *phasync_memo_dir_key(const char *dir, char kind, zend_long n, const char *pattern, size_t plen)
 {
 	struct stat st;
+	uint64_t serial;
 	phasync_memo_file_key d;
 	zend_string *k;
 
-	if (stat(dir, &st) != 0 || !S_ISDIR(st.st_mode) || !phasync_memo_dev_listable(st.st_dev, dir)) {
+	if (phasync_sc_stat(dir, &st, &serial) != 0 || !S_ISDIR(st.st_mode) || !phasync_memo_dev_listable(st.st_dev, dir)) {
 		return NULL;
 	}
 	memset(&d, 0, sizeof d);
+	d.serial = serial;
 	d.dev = st.st_dev;
 	d.ino = st.st_ino;
 	d.size = st.st_size;

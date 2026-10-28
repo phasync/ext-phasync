@@ -43,6 +43,7 @@
 #include "coroutine.c"
 #include "sapi.c"
 #include "keywords.c"
+#include "statcache.c"
 #include "memo.c"
 
 /* Swerve's script handler (Swerve::accept()) requires an app's entry file
@@ -157,6 +158,9 @@ PHP_INI_BEGIN()
 	PHP_INI_ENTRY("phasync.test_unknown_layouts", "0", PHP_INI_SYSTEM, phasync_update_test_unknown_layouts)
 	PHP_INI_ENTRY("phasync.keywords", "0", PHP_INI_SYSTEM, NULL)
 	PHP_INI_ENTRY("phasync.memo_memory", "0", PHP_INI_SYSTEM, NULL)   /* memo.c; 0: off */
+	PHP_INI_ENTRY("phasync.stat_cache", "0", PHP_INI_SYSTEM, NULL)    /* statcache.c */
+	PHP_INI_ENTRY("phasync.stat_cache_watches", "4096", PHP_INI_SYSTEM, NULL)
+	PHP_INI_ENTRY("phasync.test_stat_cache_untrusted", "0", PHP_INI_SYSTEM, NULL)   /* tests: no filesystem is trusted */
 PHP_INI_END()
 
 /* Scope: bundled fiber-interop/ext-scope (scope/scope.c, a separate translation
@@ -190,6 +194,7 @@ static PHP_MINIT_FUNCTION(phasync)
 	}
 	REGISTER_INI_ENTRIES();
 	phasync_memo_startup();
+	phasync_sc_startup();
 	if (INI_BOOL("phasync.keywords")) {
 		phasync_keywords_minit();
 	}
@@ -349,6 +354,7 @@ static PHP_MSHUTDOWN_FUNCTION(phasync)
 	}
 	phasync_next_mshutdown();
 	phasync_memo_shutdown();
+	phasync_sc_shutdown();
 	UNREGISTER_INI_ENTRIES();
 	return SUCCESS;
 }
