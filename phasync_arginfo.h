@@ -35,6 +35,8 @@ ZEND_END_ARG_INFO()
 
 #define arginfo_phasync_ext_memo_stats arginfo_phasync_ext_io_stats
 
+#define arginfo_phasync_ext_stat_cache_stats arginfo_phasync_ext_io_stats
+
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_phasync_ext_Suspension___construct, 0, 0, 0)
 ZEND_END_ARG_INFO()
 
@@ -79,6 +81,7 @@ ZEND_FUNCTION(phasync_ext_dup2);
 ZEND_FUNCTION(phasync_ext_include_global);
 ZEND_FUNCTION(phasync_ext_io_stats);
 ZEND_FUNCTION(phasync_ext_memo_stats);
+ZEND_FUNCTION(phasync_ext_stat_cache_stats);
 ZEND_METHOD(phasync_ext_Suspension, __construct);
 ZEND_METHOD(phasync_ext_Suspension, poll);
 ZEND_METHOD(phasync_ext_Suspension, manage);
@@ -99,6 +102,7 @@ static const zend_function_entry ext_functions[] = {
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "include_global"), zif_phasync_ext_include_global, arginfo_phasync_ext_include_global, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "io_stats"), zif_phasync_ext_io_stats, arginfo_phasync_ext_io_stats, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "memo_stats"), zif_phasync_ext_memo_stats, arginfo_phasync_ext_memo_stats, 0, NULL, NULL)
+	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "stat_cache_stats"), zif_phasync_ext_stat_cache_stats, arginfo_phasync_ext_stat_cache_stats, 0, NULL, NULL)
 	ZEND_FE_END
 };
 

@@ -267,6 +267,16 @@ function io_stats(): array {}
  */
 function memo_stats(): array {}
 
+/**
+ * The stat cache's counters (phasync.stat_cache; docs/stat-cache.md): 'hits' (answered without a
+ * syscall), 'misses' (looked up and remembered), 'fallbacks' (not cacheable: PHP's own call),
+ * 'flushes' (everything dropped: a watched directory changed, the watch cap, a queue overflow),
+ * 'events' (inotify events read), and the current 'watches' and 'entries'. Process-wide.
+ *
+ * @return array{enabled: bool, hits: int, misses: int, fallbacks: int, flushes: int, events: int, watches: int, entries: int}
+ */
+function stat_cache_stats(): array {}
+
 }
 
 namespace phasync {
