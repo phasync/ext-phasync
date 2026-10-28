@@ -13,7 +13,13 @@
  * hold an evicted value, so its block goes to a graveyard freed when the request ends; while the
  * graveyard holds memo_memory bytes (one request, a Swerve async worker's, evicting that much),
  * nothing new is stored until a request ends: the memo never takes more than twice
- * phasync.memo_memory. */
+ * phasync.memo_memory.
+ *
+ * A json_decode() or unserialize() text is hashed only when its fingerprint (its length and the 64
+ * bytes in its middle, where texts sharing an envelope differ) is one a stored text has, or when
+ * its hash is cached already: most misses never pay for the hash. "Seen once" is tracked by
+ * fingerprint too, so a text sharing one with a text seen before is stored on its first sight; a
+ * hit still compares the whole text. */
 
 #include "ext/json/php_json.h"
 
@@ -24,6 +30,7 @@ typedef struct phasync_memo_entry {
 	size_t bytes;                      /* the whole block */
 	uint64_t used;                     /* when last handed out: the LRU order across the tables */
 	zend_string *key;
+	zend_ulong print;                  /* a text's fingerprint, 0 for files and listings */
 	zval value;                        /* immutable, or IS_PTR to a phasync_memo_node */
 } phasync_memo_entry;
 
@@ -51,6 +58,7 @@ typedef struct {
 
 static HashTable phasync_memo_arrays, phasync_memo_objects, phasync_memo_files, phasync_memo_unserialized, phasync_memo_dirs;   /* key -> entry */
 static HashTable phasync_memo_seen;    /* hashes of what this process produced once */
+static HashTable phasync_memo_prints;  /* fingerprint -> stored texts having it */
 static phasync_memo_entry *phasync_memo_graveyard;
 static size_t phasync_memo_limit, phasync_memo_bytes, phasync_memo_grave_bytes;
 static uint64_t phasync_memo_clock, phasync_memo_errors;
@@ -235,6 +243,9 @@ static void phasync_memo_entry_dtor(zval *zv)
 {
 	phasync_memo_entry *e = Z_PTR_P(zv);
 
+	if (e->print && !--Z_LVAL_P(zend_hash_index_find(&phasync_memo_prints, e->print))) {
+		zend_hash_index_del(&phasync_memo_prints, e->print);
+	}
 	phasync_memo_bytes -= e->bytes;
 	phasync_memo_grave_bytes += e->bytes;
 	e->next = phasync_memo_graveyard;
@@ -297,7 +308,7 @@ static phasync_memo_entry *phasync_memo_touch(HashTable *t, zval *found)
 }
 
 /* Stores value under key: a block holding the entry, the key and the value's immutable copy */
-static void phasync_memo_put(HashTable *t, zend_string *key, zval *value)
+static void phasync_memo_put(HashTable *t, zend_string *key, zend_ulong print, zval *value)
 {
 	phasync_memo_copy c;
 	phasync_memo_entry *e;
@@ -328,11 +339,43 @@ static void phasync_memo_put(HashTable *t, zend_string *key, zval *value)
 	ZEND_ASSERT(c.size == size);
 	zend_hash_destroy(&c.strings);
 	e->bytes = size;
+	if ((e->print = print)) {
+		zval *n = zend_hash_index_lookup(&phasync_memo_prints, print);   /* IS_NULL when new */
+		ZVAL_LONG(n, Z_TYPE_P(n) == IS_NULL ? 1 : Z_LVAL_P(n) + 1);
+	}
 	e->used = ++phasync_memo_clock;
 	phasync_memo_bytes += size;
 	phasync_memo_stored++;
 	ZVAL_PTR(&p, e);
 	zend_hash_add_new(t, e->key, &p);
+}
+
+/* A text's fingerprint: its length and the 64 bytes in its middle (all of it when shorter); never 0 */
+static zend_ulong phasync_memo_print(zend_string *s)
+{
+	size_t n = ZSTR_LEN(s), m = MIN(n, 64);
+	const char *p = ZSTR_VAL(s) + (n - m) / 2;
+	uint64_t h = n, w;
+
+	for (; m >= 8; m -= 8, p += 8) {
+		memcpy(&w, p, 8);
+		h = (h ^ w) * 0x9E3779B97F4A7C15ULL;
+	}
+	if (m) {
+		w = 0;
+		memcpy(&w, p, m);
+		h = (h ^ w) * 0x9E3779B97F4A7C15ULL;
+	}
+	return (zend_ulong) (h ^ h >> 29) | 1;
+}
+
+/* The text's entry, looked up only when its hash is cached (free) or its fingerprint is a stored text's */
+static zval *phasync_memo_find_text(HashTable *t, zend_string *s, zend_ulong *print)
+{
+	if (!ZSTR_H(s) && !zend_hash_index_exists(&phasync_memo_prints, *print = phasync_memo_print(s))) {
+		return NULL;
+	}
+	return zend_hash_find(t, s);
 }
 
 /* Stored the second time this process produces it */
@@ -403,6 +446,7 @@ static ZEND_NAMED_FUNCTION(phasync_memo_json_decode)
 	uint64_t errors = phasync_memo_errors;
 	HashTable *t;
 	zval *found;
+	zend_ulong print = 0;
 
 	if (argc > 4 || !text || Z_TYPE_P(text) != IS_STRING
 	 || (assoc && Z_TYPE_P(assoc) != IS_TRUE && Z_TYPE_P(assoc) != IS_FALSE && Z_TYPE_P(assoc) != IS_NULL)
@@ -412,7 +456,7 @@ static ZEND_NAMED_FUNCTION(phasync_memo_json_decode)
 		return;
 	}
 	t = assoc && Z_TYPE_P(assoc) == IS_TRUE ? &phasync_memo_arrays : &phasync_memo_objects;
-	if ((found = zend_hash_find(t, Z_STR_P(text)))) {
+	if ((found = phasync_memo_find_text(t, Z_STR_P(text), &print))) {
 		phasync_memo_json_hits++;
 		JSON_G(error_code) = PHP_JSON_ERROR_NONE;
 		phasync_memo_out(return_value, &phasync_memo_touch(t, found)->value);
@@ -421,8 +465,8 @@ static ZEND_NAMED_FUNCTION(phasync_memo_json_decode)
 	phasync_memo_misses++;
 	phasync_memo_orig_json_decode(INTERNAL_FUNCTION_PARAM_PASSTHRU);
 	if (!EG(exception) && errors == phasync_memo_errors && (Z_TYPE_P(return_value) == IS_ARRAY || Z_TYPE_P(return_value) == IS_OBJECT)
-	 && phasync_memo_second_time(zend_string_hash_val(Z_STR_P(text)) ^ (t == &phasync_memo_arrays))) {
-		phasync_memo_put(t, Z_STR_P(text), return_value);
+	 && phasync_memo_second_time((print = print ? print : phasync_memo_print(Z_STR_P(text))) ^ (t == &phasync_memo_arrays))) {
+		phasync_memo_put(t, Z_STR_P(text), print, return_value);
 	}
 }
 
@@ -485,7 +529,7 @@ static ZEND_NAMED_FUNCTION(phasync_memo_file_get_contents)
 	if (Z_TYPE_P(return_value) == IS_STRING && Z_STRLEN_P(return_value) == expect && !EG(exception) && errors == phasync_memo_errors
 	 && phasync_memo_file_stat(Z_STRVAL_P(path), &after) && (after.offset = key.offset, after.length = key.length, !memcmp(&key, &after, sizeof key))
 	 && phasync_memo_second_time(zend_string_hash_val(k))) {
-		phasync_memo_put(&phasync_memo_files, k, return_value);
+		phasync_memo_put(&phasync_memo_files, k, 0, return_value);
 	}
 	zend_string_release(k);
 }
@@ -578,7 +622,7 @@ static void phasync_memo_listing(INTERNAL_FUNCTION_PARAMETERS, zif_handler orig,
 	if (Z_TYPE_P(return_value) == IS_ARRAY && !EG(exception) && errors == phasync_memo_errors
 	 && (after = phasync_memo_dir_key(dir, kind, n, pattern, plen))) {
 		if (zend_string_equals(k, after) && phasync_memo_second_time(zend_string_hash_val(k))) {
-			phasync_memo_put(&phasync_memo_dirs, k, return_value);
+			phasync_memo_put(&phasync_memo_dirs, k, 0, return_value);
 		}
 		zend_string_release(after);
 	}
@@ -640,6 +684,7 @@ static ZEND_NAMED_FUNCTION(phasync_memo_unserialize)
 	zval *options = argc >= 2 ? ZEND_CALL_ARG(execute_data, 2) : NULL;
 	uint64_t errors = phasync_memo_errors;
 	zval *found;
+	zend_ulong print = 0;
 
 	if (options && Z_TYPE_P(options) == IS_ARRAY && !zend_hash_num_elements(Z_ARRVAL_P(options))) {
 		options = NULL;   /* the default */
@@ -650,7 +695,7 @@ static ZEND_NAMED_FUNCTION(phasync_memo_unserialize)
 		phasync_memo_orig_unserialize(INTERNAL_FUNCTION_PARAM_PASSTHRU);
 		return;
 	}
-	if ((found = zend_hash_find(&phasync_memo_unserialized, Z_STR_P(data)))
+	if ((found = phasync_memo_find_text(&phasync_memo_unserialized, Z_STR_P(data), &print))
 	 && (!options || Z_TYPE(((phasync_memo_entry *) Z_PTR_P(found))->value) != IS_PTR)) {
 		phasync_memo_unserialize_hits++;
 		phasync_memo_out(return_value, &phasync_memo_touch(&phasync_memo_unserialized, found)->value);
@@ -659,7 +704,7 @@ static ZEND_NAMED_FUNCTION(phasync_memo_unserialize)
 	phasync_memo_misses++;
 	phasync_memo_orig_unserialize(INTERNAL_FUNCTION_PARAM_PASSTHRU);
 	if ((Z_TYPE_P(return_value) == IS_ARRAY || Z_TYPE_P(return_value) == IS_OBJECT) && !EG(exception) && errors == phasync_memo_errors
-	 && phasync_memo_second_time(zend_string_hash_val(Z_STR_P(data)) ^ 2)) {
+	 && phasync_memo_second_time((print = print ? print : phasync_memo_print(Z_STR_P(data))) ^ 2)) {
 		HashTable seen;
 		bool objects = false, plain;
 
@@ -667,7 +712,7 @@ static ZEND_NAMED_FUNCTION(phasync_memo_unserialize)
 		plain = phasync_memo_plain(return_value, &seen, &objects);
 		zend_hash_destroy(&seen);
 		if (plain && (!objects || !options)) {
-			phasync_memo_put(&phasync_memo_unserialized, Z_STR_P(data), return_value);
+			phasync_memo_put(&phasync_memo_unserialized, Z_STR_P(data), print, return_value);
 		}
 	}
 }
@@ -699,6 +744,7 @@ static void phasync_memo_startup(void)
 	zend_hash_init(&phasync_memo_unserialized, 64, NULL, phasync_memo_entry_dtor, 1);
 	zend_hash_init(&phasync_memo_dirs, 64, NULL, phasync_memo_entry_dtor, 1);
 	zend_hash_init(&phasync_memo_seen, 64, NULL, NULL, 1);
+	zend_hash_init(&phasync_memo_prints, 64, NULL, NULL, 1);
 	zend_observer_error_register(phasync_memo_error_observer);
 	for (int i = 0; i < 5; i++) {
 		*orig[i] = f[i]->handler;
@@ -732,6 +778,7 @@ static void phasync_memo_shutdown(void)
 	zend_hash_destroy(&phasync_memo_unserialized);
 	zend_hash_destroy(&phasync_memo_dirs);
 	zend_hash_destroy(&phasync_memo_seen);
+	zend_hash_destroy(&phasync_memo_prints);
 	phasync_memo_bury();
 	phasync_memo_on = false;
 }
