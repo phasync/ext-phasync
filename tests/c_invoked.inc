@@ -19,7 +19,7 @@ function c_invoked(string $kind, Closure $op): void
             }, new Sink);
         },
         function () use ($log) {
-            phasync\ext\sapi(function () use ($log) { usleep(1000); $log[] = 'B'; }, new Sink);
+            phasync\ext\sapi(function () use ($log) { $log[] = 'B'; }, new Sink);
         },
     );
     echo $kind, ': ', implode(', ', (array) $log), "\n";
