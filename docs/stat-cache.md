@@ -64,7 +64,13 @@ inherited epoll fd and starts its own on first use. MSHUTDOWN cancels and joins 
   `close` of a writing stream, truncate; this covers `fwrite()`, `file_put_contents()`, `copy()`,
   `SplFileObject`) and the functions that bypass both (`chmod`, `chown`, `chgrp`, `lchown`,
   `lchgrp`, `touch`, `symlink`, `link`, `tempnam`, `tmpfile`, `move_uploaded_file`). C code writing
-  without PHP streams (libzip, sqlite, session files) is seen like another process's change.
+  without PHP streams (libzip, sqlite, session files) is seen like another process's change;
+- what a child process changed is seen as soon as waiting for it returns: `exec()`, `system()`,
+  `passthru()`, `shell_exec()`, `proc_close()`, `pclose()`, `pcntl_wait()` and `pcntl_waitpid()`
+  set `phasync_sc_own` after the wait (blocking.c), since the child's events are queued before it
+  exits. Without this, `exec('mv a b'); file_exists('b')` answered from the cache on a loaded
+  machine about once in a hundred (tests/stat_cache_child_sync.phpt). Another process signalling
+  through a pipe or socket is not a sync point: its changes are seen once the watcher has woken.
 
 The fd is not registered with the poller, and `run_next()` does not drain it: events wait in the
 kernel queue meanwhile (overflow drops everything). Under valgrind (which schedules the watcher

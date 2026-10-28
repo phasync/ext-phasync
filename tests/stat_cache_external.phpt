@@ -14,9 +14,10 @@ $d = "$root/a/b";
 $f = "$d/f.txt";
 $sh = static fn (string $cmd) => exec($cmd);
 $q = 'escapeshellarg';
+// is_writable() is checked against a fresh process's answer: root may write a 0400 file
 $show = static function (string $what) use ($f) {
     for ($i = 0; $i < 3; $i++) {   // repeated: the second and third are hits
-        $r = [file_exists($f), is_file($f), is_dir(dirname($f)), is_readable($f), is_writable($f),
+        $r = [file_exists($f), is_file($f), is_dir(dirname($f)), is_readable($f), is_writable($f) === (exec('test -w ' . escapeshellarg($f) . ' && echo 1') === '1'),
               @filesize($f), @fileperms($f) & 0777, file_exists(dirname($f) . '/../b/f.txt')];
     }
     echo str_pad($what, 22), json_encode($r), "\n";
@@ -67,17 +68,17 @@ var_dump($s['enabled'], $s['hits'] > 50, $s['misses'] > 0, $s['flushes'] > 0);
 $sh('rm -rf ' . $q($root));
 ?>
 --EXPECT--
-missing               [false,false,true,false,false,false,0,false]
+missing               [false,false,true,false,true,false,0,false]
 created               [true,true,true,true,true,3,420,true]
 appended              [true,true,true,true,true,8,420,true]
-chmod 0400            [true,true,true,true,false,8,256,true]
-renamed away          [false,false,true,false,false,false,0,false]
-renamed back          [true,true,true,true,false,8,256,true]
-deleted               [false,false,true,false,false,false,0,false]
+chmod 0400            [true,true,true,true,true,8,256,true]
+renamed away          [false,false,true,false,true,false,0,false]
+renamed back          [true,true,true,true,true,8,256,true]
+deleted               [false,false,true,false,true,false,0,false]
 created again         [true,true,true,true,true,1,420,true]
-ancestor renamed      [false,false,false,false,false,false,0,false]
+ancestor renamed      [false,false,false,false,true,false,0,false]
 ancestor back         [true,true,true,true,true,1,420,true]
-ancestor deleted      [false,false,false,false,false,false,0,false]
+ancestor deleted      [false,false,false,false,true,false,0,false]
 all recreated         [true,true,true,true,true,2,420,true]
 bool(false)
 bool(false)

@@ -1606,12 +1606,14 @@ static void phasync_exec_family(INTERNAL_FUNCTION_PARAMETERS, void (*orig)(INTER
 
 	if (!phasync_reading() || EG(active_fiber) == NULL) {
 		orig(INTERNAL_FUNCTION_PARAM_PASSTHRU);
+		phasync_sc_own = true;   /* the child has exited: the stat cache drains what it changed */
 		return;
 	}
 	sp.n = phasync_children(sp.before);
 	PHASYNC_G(spawn) = &sp;
 	orig(INTERNAL_FUNCTION_PARAM_PASSTHRU);
 	PHASYNC_G(spawn) = NULL;             /* never left armed, whatever happened */
+	phasync_sc_own = true;
 }
 
 static ZEND_NAMED_FUNCTION(phasync_exec_override)
@@ -2263,6 +2265,16 @@ static zend_internal_function *phasync_find_ifunc(const char *name, size_t len)
 	return NULL;
 }
 
+/* Waiting for a child is a sync point for the stat cache: whatever the child changed is in
+ * the inotify queue before it exits, so the next lookup drains it (statcache.c). Set after
+ * the wait, since other coroutines' lookups may drain while this one waits. */
+#define PHASYNC_SC_SYNC_WRAP(name) \
+	static ZEND_NAMED_FUNCTION(name##_sync) { name(INTERNAL_FUNCTION_PARAM_PASSTHRU); phasync_sc_own = true; }
+PHASYNC_SC_SYNC_WRAP(phasync_proc_close_override)
+PHASYNC_SC_SYNC_WRAP(phasync_pclose_override)
+PHASYNC_SC_SYNC_WRAP(phasync_pcntl_waitpid_override)
+PHASYNC_SC_SYNC_WRAP(phasync_pcntl_wait_override)
+
 /* Install the transport re-registration + internal-function overrides. Called
  * at request start and again by the first Suspension::manage(), and left in place:
  * the hooks are inert outside a managed fiber (the wrapped ops and sleep/pool
@@ -2327,7 +2339,7 @@ static void phasync_install_hooks(void)
 	}
 	if ((f = phasync_find_ifunc("proc_close", sizeof("proc_close") - 1))) {
 		PHASYNC_G(orig_proc_close) = f->handler;
-		f->handler = phasync_proc_close_override;
+		f->handler = phasync_proc_close_override_sync;
 	}
 	if ((f = phasync_find_ifunc("curl_exec", sizeof("curl_exec") - 1))) {
 		PHASYNC_G(orig_curl_exec) = f->handler;
@@ -2368,11 +2380,11 @@ static void phasync_install_hooks(void)
 	}
 	if ((f = phasync_find_ifunc("pcntl_waitpid", sizeof("pcntl_waitpid") - 1))) {
 		PHASYNC_G(orig_pcntl_waitpid) = f->handler;
-		f->handler = phasync_pcntl_waitpid_override;
+		f->handler = phasync_pcntl_waitpid_override_sync;
 	}
 	if ((f = phasync_find_ifunc("pcntl_wait", sizeof("pcntl_wait") - 1))) {
 		PHASYNC_G(orig_pcntl_wait) = f->handler;
-		f->handler = phasync_pcntl_wait_override;
+		f->handler = phasync_pcntl_wait_override_sync;
 	}
 	for (zend_long i = 0; i < (zend_long) PHASYNC_FS_NFUNCS; i++) {
 		if ((f = phasync_find_ifunc(phasync_fs_funcs[i].name, strlen(phasync_fs_funcs[i].name)))) {
@@ -2452,7 +2464,7 @@ static void phasync_install_hooks(void)
 	}
 	if ((f = phasync_find_ifunc("pclose", sizeof("pclose") - 1))) {
 		PHASYNC_G(orig_pclose) = f->handler;
-		f->handler = phasync_pclose_override;
+		f->handler = phasync_pclose_override_sync;
 	}
 	phasync_conn_hooks_install();
 	PHASYNC_G(hooks_installed) = 1;
