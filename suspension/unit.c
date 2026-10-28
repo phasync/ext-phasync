@@ -242,6 +242,7 @@ void phasync_susp_request_startup(int module_number)
 	PHASYNC_G(hooks_installed) = 0;
 	zend_hash_clean(&PHASYNC_G(hooked));
 	zend_hash_clean(&PHASYNC_G(inflight));
+	zend_hash_clean(&PHASYNC_G(conn_busy));   /* left by a bailout */
 	PHASYNC_G(holds) = 0;
 	/* Always-on: the transport factories and function overrides go in at the
 	 * start of every request (they are inert outside a managed fiber),

@@ -34,12 +34,12 @@ foreach (["refcount", "gc"] as $how) {
     $db = new mysqli($host, $user, $pass, "", $port);
     destroy_while_waiting(new Loop, $how, fn() => $db->query("SELECT SLEEP(2)"), after: [after($db, $host, $user, $pass, $port)]);
 }
-// #21: the closer (mysqli::close() destroyed while another coroutine waits for its
-// query on the connection: held until the query has failed, then closes.
+// #21, since #6: mysqli::close() while another coroutine waits for its query on the
+// connection throws a LogicException at once; the waiting query is undisturbed.
 foreach (["refcount", "gc"] as $how) {
     echo "closer destroyed ($how)\n";
     $db = new mysqli($host, $user, $pass, "", $port);
-    destroy_while_waiting(new Loop, $how, fn() => $db->close(), before: [function () use ($db) {
+    destroy_while_waiting(new Loop, $how, function () use ($db) { try { $db->close(); } catch (LogicException $e) { echo "  close: ", get_class($e), "\n"; } }, before: [function () use ($db) {
         $r = $db->query("SELECT SLEEP(2)");
         echo "  query: ", json_encode($r), "\n";
     }]);
@@ -65,7 +65,7 @@ echo "exit: $rc\n";
 unlink($child);
 ?>
 --EXPECT--
-  finally ran
+finally ran
   closed
   new connection: 1
   finally ran
@@ -73,13 +73,19 @@ unlink($child);
   closed
   new connection: 1
 closer destroyed (refcount)
-  query: false
+  close: LogicException
+  returned null (not destroyed)
   finally ran
+  not suspended
+  query: {}
   new connection: 1
 closer destroyed (gc)
-  collected: no
-  query: false
+  close: LogicException
+  returned null (not destroyed)
   finally ran
+  not suspended
+  collected: yes
+  query: {}
   new connection: 1
   finally ran
   surfaced: mysqli_sql_exception

@@ -2168,6 +2168,7 @@ static ZEND_NAMED_FUNCTION(phasync_conn_sqlite3)
 static void *phasync_pdo_conn(pdo_dbh_t *dbh)
 {
 	return dbh && dbh->driver && (strcmp(dbh->driver->driver_name, "pgsql") == 0
+	                           || strcmp(dbh->driver->driver_name, "mysql") == 0
 	                           || strcmp(dbh->driver->driver_name, "sqlite") == 0) ? dbh : NULL;
 }
 
@@ -2179,6 +2180,69 @@ static ZEND_NAMED_FUNCTION(phasync_conn_pdo)
 static ZEND_NAMED_FUNCTION(phasync_conn_pdostmt)
 {
 	phasync_conn_call(phasync_pdo_conn(php_pdo_stmt_fetch_object(Z_OBJ_P(ZEND_THIS))->dbh), INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+#endif
+
+#ifdef PHASYNC_HAVE_MYSQLI
+/* mysqli: the mysqlnd connection of the mysqli, mysqli_stmt or mysqli_result
+ * object (this, or the first mysqli object argument of a mysqli_*() function).
+ * A MYSQLI_ASYNC query leaves the connection busy for its coroutine until the
+ * result is reaped (the connection is still in CONN_QUERY_SENT). */
+static zend_class_entry *phasync_mysqli_ce[3];   /* mysqli, mysqli_stmt, mysqli_result */
+
+static ZEND_NAMED_FUNCTION(phasync_conn_mysqli)
+{
+	zend_object *obj = NULL;
+	MYSQLND_CONN_DATA *conn = NULL;
+	bool link = false;
+
+	if (Z_TYPE(EX(This)) == IS_OBJECT) {
+		obj = Z_OBJ(EX(This));
+	} else {
+		for (uint32_t i = 1; i <= ZEND_NUM_ARGS() && !obj; i++) {
+			zval *a = ZEND_CALL_ARG(execute_data, i);
+
+			if (Z_TYPE_P(a) == IS_OBJECT && Z_OBJCE_P(a)->type == ZEND_INTERNAL_CLASS
+			 && Z_OBJCE_P(a)->info.internal.module == EX(func)->internal_function.module) {
+				obj = Z_OBJ_P(a);
+			}
+		}
+	}
+	if (obj) {
+		MYSQLI_RESOURCE *res = php_mysqli_fetch_object(obj)->ptr;
+		void *ptr = res ? res->ptr : NULL;
+
+		if (ptr) {
+			if (instanceof_function(obj->ce, phasync_mysqli_ce[0])) {
+				MYSQL *m = ((MY_MYSQL *) ptr)->mysql;
+				conn = m ? m->data : NULL;
+				link = true;
+			} else if (instanceof_function(obj->ce, phasync_mysqli_ce[1])) {
+				MYSQL_STMT *st = ((MY_STMT *) ptr)->stmt;
+				conn = st && st->data ? st->data->conn : NULL;
+			} else if (instanceof_function(obj->ce, phasync_mysqli_ce[2])) {
+				conn = ((MYSQL_RES *) ptr)->conn;
+			}
+		}
+	}
+	if (!link || !phasync_reading()) {
+		phasync_conn_call(conn, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+		return;
+	}
+	zif_handler orig = EX(func)->internal_function.reserved[phasync_conn_slot];
+
+	if (phasync_conn_enter((zend_ulong) (uintptr_t) conn) < 0) {
+		return;
+	}
+	orig(INTERNAL_FUNCTION_PARAM_PASSTHRU);
+	/* close() frees the connection: look it up again rather than read conn. */
+	MYSQLI_RESOURCE *res = php_mysqli_fetch_object(obj)->ptr;
+	MY_MYSQL *my = res ? res->ptr : NULL;
+
+	if (conn && zend_hash_index_find_ptr(&PHASYNC_G(conn_busy), (zend_ulong) (uintptr_t) conn) == EG(current_fiber_context)
+	 && (!my || !my->mysql || my->mysql->data != conn || GET_CONNECTION_STATE(&conn->state) != CONN_QUERY_SENT)) {
+		zend_hash_index_del(&PHASYNC_G(conn_busy), (zend_ulong) (uintptr_t) conn);
+	}
 }
 #endif
 
@@ -2226,6 +2290,26 @@ static void phasync_conn_hooks_install(void)
 	phasync_conn_hook_class(ZEND_STRL("pdo\\pgsql"), phasync_conn_pdo);
 	phasync_conn_hook_class(ZEND_STRL("pdo\\sqlite"), phasync_conn_pdo);
 	phasync_conn_hook_class(ZEND_STRL("pdostatement"), phasync_conn_pdostmt);
+	phasync_conn_hook_class(ZEND_STRL("pdo\\mysql"), phasync_conn_pdo);
+#endif
+#ifdef PHASYNC_HAVE_MYSQLI
+	{
+		zend_module_entry *mysqli = zend_hash_str_find_ptr(&module_registry, ZEND_STRL("mysqli"));
+		static const char *const names[] = {"mysqli", "mysqli_stmt", "mysqli_result"};
+
+		if (mysqli) {
+			for (int i = 0; i < 3; i++) {
+				phasync_mysqli_ce[i] = zend_hash_str_find_ptr(CG(class_table), names[i], strlen(names[i]));
+				phasync_conn_hook_class(names[i], strlen(names[i]), phasync_conn_mysqli);
+			}
+			ZEND_HASH_MAP_FOREACH_PTR(CG(function_table), f) {
+				if (f->type == ZEND_INTERNAL_FUNCTION && f->internal_function.module == mysqli
+				 && !zend_string_equals_literal(f->common.function_name, "mysqli_connect")) {
+					phasync_conn_hook(f, phasync_conn_mysqli);
+				}
+			} ZEND_HASH_FOREACH_END();
+		}
+	}
 #endif
 	if ((phasync_conn_pgsql_on = phasync_layouts_known() && pgsql && pgsql->module_started
 	                           && pgsql->globals_size >= sizeof(phasync_pgsql_globals_head))) {

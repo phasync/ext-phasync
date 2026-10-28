@@ -12,7 +12,8 @@ if (!@fsockopen($host, (int) $port, $errno, $errstr, 2)) die("skip MySQL at $hos
 ?>
 --FILE--
 <?php
-// Coroutine A waits in mysqlnd's read of its query's result; B closes the
+// Since #6 both calls throw LogicException (concurrent use) and A's query is
+// undisturbed. Coroutine A waits in mysqlnd's read of its query's result; B closes the
 // connection (after a ping that fails: commands out of sync). mysqlnd frees the
 // connection's stream in close; up to 0.5.0-alpha13 A then resumed on the freed
 // stream and the process segfaulted. Runs in a child with the normal ini, because
@@ -33,10 +34,9 @@ foreach ([true, false] as $ping) {
         function () use ($db, $ping) {
             usleep(50000);
             if ($ping) {
-                try { $db->ping(); } catch (mysqli_sql_exception $e) { echo "b: ", $e->getMessage(), "\n"; }
+                try { $db->ping(); } catch (LogicException $e) { echo "b: ", get_class($e), "\n"; }
             }
-            $db->close();
-            echo "b: closed\n";
+            try { $db->close(); } catch (LogicException $e) { echo "b: ", get_class($e), "\n"; }
         },
     );
 }
@@ -47,9 +47,9 @@ echo "exit: $rc\n";
 unlink($child);
 ?>
 --EXPECT--
-b: Commands out of sync; you can't run this command now
-a: failed
-b: closed
-a: failed
-b: closed
+b: LogicException
+b: LogicException
+a: no error
+b: LogicException
+a: no error
 exit: 0

@@ -65,6 +65,7 @@
 #endif
 #if __has_include("ext/mysqli/php_mysqli_structs.h")
 # include "ext/mysqli/php_mysqli_structs.h"
+# include "ext/mysqlnd/mysqlnd_connection.h"
 # define PHASYNC_HAVE_MYSQLI 1
 #endif
 #if __has_include("ext/pdo/php_pdo_driver.h")
