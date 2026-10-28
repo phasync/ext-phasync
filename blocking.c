@@ -1413,6 +1413,9 @@ static void phasync_inflight_close(php_stream *stream);
 
 static int phasync_stdio_close(php_stream *stream, int close_handle)
 {
+	if (strpbrk(stream->mode, "waxc+")) {
+		phasync_sc_own = true;
+	}
 	phasync_inflight_close(stream);
 	return phasync_stdio_close_orig(stream, close_handle);
 }
@@ -1463,6 +1466,9 @@ static int phasync_stdio_mode(php_stream *stream, php_socket_t *fdp)
 
 static int phasync_stdio_set_option(php_stream *stream, int option, int value, void *ptrparam)
 {
+	if (option == PHP_STREAM_OPTION_TRUNCATE_API && value == PHP_STREAM_TRUNCATE_SET_SIZE) {
+		phasync_sc_own = true;
+	}
 	/* fsync()/fdatasync() wait for the disk: inside a scope, in a fiber, on the
 	 * pool. A stream with a C FILE* (its own buffer, to flush first on PHP's
 	 * thread) stays native; plain file streams write straight to the fd. */
@@ -1522,6 +1528,7 @@ static ssize_t phasync_stdio_write(php_stream *stream, const char *buf, size_t c
 {
 	php_socket_t fd;
 
+	phasync_sc_own = true;
 	/* A buffered write waits for the disk only under writeback pressure, and
 	 * RWF_NOWAIT would refuse any write that allocates blocks: only a pool file
 	 * writes on the pool. */

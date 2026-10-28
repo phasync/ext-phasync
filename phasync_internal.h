@@ -8,6 +8,9 @@
 #include "ext/filter/php_filter.h"
 #include "main/php_variables.h"
 
+/* statcache.c: this process mutated the file system; the next stat cache lookup drains inotify */
+static bool phasync_sc_own;
+
 
 typedef struct {
 	int pidfd;          /* process pipe: pidfd of its child (the taint), or -1 */
