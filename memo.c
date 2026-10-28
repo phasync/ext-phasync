@@ -725,7 +725,7 @@ static ZEND_NAMED_FUNCTION(phasync_memo_unserialize)
 	}
 }
 
-/* MINIT: take over the five functions; phasync.memo_memory=0 (the default) leaves them alone */
+/* MINIT: take over the five functions; phasync.memo_memory=0 leaves them alone */
 static void phasync_memo_startup(void)
 {
 	static const char *const names[5] = { "json_decode", "file_get_contents", "unserialize", "scandir", "glob" };

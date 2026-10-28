@@ -488,7 +488,7 @@ afterwards, so it survives request shutdown and is there in every later `run_nex
 
 ### Memo: `json_decode()`, `unserialize()`, `file_get_contents()`, `scandir()`, `glob()` across requests
 
-With `phasync.memo_memory` set (`PHP_INI_SYSTEM`, for example `64M`; the default `0` is off), the
+With `phasync.memo_memory` (`PHP_INI_SYSTEM`, default `16M`; `0` turns it off), the
 process remembers results, so a later request, in the same `run_next()` run or a later one, gets
 them without the work:
 

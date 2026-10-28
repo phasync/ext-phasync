@@ -156,7 +156,7 @@ PHP_INI_BEGIN()
 		fs_offload_types, zend_phasync_globals, phasync_globals)
 	PHP_INI_ENTRY("phasync.test_unknown_layouts", "0", PHP_INI_SYSTEM, phasync_update_test_unknown_layouts)
 	PHP_INI_ENTRY("phasync.keywords", "0", PHP_INI_SYSTEM, NULL)
-	PHP_INI_ENTRY("phasync.memo_memory", "0", PHP_INI_SYSTEM, NULL)   /* memo.c; 0: off */
+	PHP_INI_ENTRY("phasync.memo_memory", "16M", PHP_INI_SYSTEM, NULL) /* memo.c; 0: off */
 PHP_INI_END()
 
 /* Scope: bundled fiber-interop/ext-scope (scope/scope.c, a separate translation
