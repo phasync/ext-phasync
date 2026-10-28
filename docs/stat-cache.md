@@ -109,8 +109,8 @@ session GC go through Symfony Finder).
 
 **Memo.** The memo's `file_get_contents()` key and `scandir()`/`glob()` listing key take the
 cached `stat()` plus the result's serial, new for each lstat: an entry added within one timestamp
-tick (same mtime, same size) changes the key too. A forked child's serials differ from its
-parent's, so inherited memo entries miss once in the child.
+tick (same mtime, same size) changes the key too. A forked child keeps a parent's serial for a path
+its own lstat() finds unchanged, so inherited memo entries still hit.
 
 ## Measurements
 

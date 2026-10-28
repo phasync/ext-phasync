@@ -7,6 +7,8 @@ phasync
 if (!class_exists('Fiber')) die('skip requires Fibers');
 if (!function_exists('proc_open')) die('skip requires proc_open');
 ?>
+--INI--
+phasync.gc_grace=0
 --FILE--
 <?php
 // Up to 0.5.0-alpha23, phasync_close_if_unwinding() (the #14/#23 "leave it to

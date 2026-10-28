@@ -4,6 +4,8 @@ A coroutine destroyed (by refcount or by the cycle collector) while waiting in s
 phasync
 --SKIPIF--
 <?php if (!class_exists('Fiber')) die('skip requires Fibers'); ?>
+--INI--
+phasync.gc_grace=0
 --FILE--
 <?php
 require __DIR__ . '/destroy.inc';

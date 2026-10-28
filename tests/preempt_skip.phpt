@@ -4,6 +4,8 @@ Preemption: skipped in the cycle collector's destructors and in a fiber being de
 phasync
 --SKIPIF--
 <?php require __DIR__ . '/timers.inc'; skip_if_coarse_timers(25); ?>
+--INI--
+phasync.gc_grace=0
 --FILE--
 <?php
 require __DIR__ . '/preempt.inc';
