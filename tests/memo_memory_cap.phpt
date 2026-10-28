@@ -4,6 +4,7 @@ memo: phasync.memo_memory bounds the entries, counted in the bytes they take; le
 phasync
 json
 --INI--
+phasync.memo_min_ns=0
 phasync.memo_memory=1M
 --FILE--
 <?php

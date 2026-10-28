@@ -4,6 +4,7 @@ memo pre-filter: texts with equal length and equal middle 64 bytes (one fingerpr
 phasync
 json
 --INI--
+phasync.memo_min_ns=0
 phasync.memo_memory=64M
 --FILE--
 <?php

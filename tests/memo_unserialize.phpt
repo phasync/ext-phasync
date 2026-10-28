@@ -3,6 +3,7 @@ memo unserialize($data): a text unserialized before (seen twice) whose result ho
 --EXTENSIONS--
 phasync
 --INI--
+phasync.memo_min_ns=0
 phasync.memo_memory=64M
 --FILE--
 <?php

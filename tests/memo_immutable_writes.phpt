@@ -4,6 +4,7 @@ memo: a hit is an immutable value; every way of writing to it (assignment, refer
 phasync
 json
 --INI--
+phasync.memo_min_ns=0
 phasync.memo_memory=8M
 --FILE--
 <?php

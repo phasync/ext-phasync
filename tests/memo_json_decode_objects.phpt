@@ -4,6 +4,7 @@ memo json_decode($json) (objects): a JSON text decoded before comes back as a ne
 phasync
 json
 --INI--
+phasync.memo_min_ns=0
 phasync.memo_memory=64M
 --FILE--
 <?php

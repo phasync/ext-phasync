@@ -4,6 +4,8 @@ memo across run_next() requests: what one request decoded and read is a hit in a
 phasync
 --SKIPIF--
 <?php if (!in_array(PHP_OS_FAMILY, ['Linux', 'BSD', 'Solaris'], true)) die('skip run_next() needs an ELF platform'); ?>
+--INI--
+phasync.memo_min_ns=0
 --FILE--
 <?php
 require __DIR__ . '/run_next.inc';
@@ -40,7 +42,7 @@ if ($n < 5) {
     phasync\ext\run_next(__FILE__);
 }
 PHP);
-[$out, $status] = rn_exec($d, "$d/loop.php", ["$d/data.json"], null, ['ini' => ['phasync.memo_memory' => '256K']]);
+[$out, $status] = rn_exec($d, "$d/loop.php", ["$d/data.json"], null, ['ini' => ['phasync.memo_memory' => '256K', 'phasync.memo_min_ns' => '0']]);
 echo $out, "status: $status\n";
 rn_clean($d);
 ?>

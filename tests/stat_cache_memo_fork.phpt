@@ -6,6 +6,7 @@ pcntl
 --SKIPIF--
 <?php if (PHP_OS_FAMILY !== 'Linux') die('skip Linux only'); ?>
 --INI--
+phasync.memo_min_ns=0
 phasync.stat_cache=1
 phasync.memo_memory=8M
 --FILE--

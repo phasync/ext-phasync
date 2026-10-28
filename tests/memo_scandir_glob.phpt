@@ -3,6 +3,7 @@ memo scandir() and glob(): a listing made before (seen twice) comes back as the 
 --EXTENSIONS--
 phasync
 --INI--
+phasync.memo_min_ns=0
 phasync.memo_memory=64M
 --FILE--
 <?php

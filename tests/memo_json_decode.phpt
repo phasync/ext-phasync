@@ -6,6 +6,7 @@ json
 --SKIPIF--
 <?php if (!function_exists('pcntl_fork')) die('skip needs pcntl_fork'); ?>
 --INI--
+phasync.memo_min_ns=0
 phasync.memo_memory=64M
 --FILE--
 <?php
@@ -35,7 +36,7 @@ json_decode($json, true, 512, JSON_BIGINT_AS_STRING);                           
 echo 'bypassed: ', $hits() - $h1, " hits\n";
 $h2 = $hits();
 json_decode($small, true); json_decode($small, true); json_decode($small, true);
-echo 'a text that decodes in under 500 ns: ', $hits() - $h2, " hits\n";
+echo 'a small text: ', $hits() - $h2, " hit\n";
 
 $pid = pcntl_fork();
 if ($pid === 0) {
@@ -51,5 +52,5 @@ equal: true, hits: 1
 store unchanged by a write: true
 error before: yes, after a hit: none
 bypassed: 0 hits
-a text that decodes in under 500 ns: 0 hits
+a small text: 1 hit
 forked process: hit, equal

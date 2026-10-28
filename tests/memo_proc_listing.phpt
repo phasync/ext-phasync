@@ -5,6 +5,7 @@ phasync
 --SKIPIF--
 <?php if (!is_dir('/proc/self/fd')) die('skip needs /proc'); ?>
 --INI--
+phasync.memo_min_ns=0
 phasync.memo_memory=64M
 --FILE--
 <?php

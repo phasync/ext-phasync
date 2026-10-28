@@ -4,6 +4,7 @@ memo: entries evicted while the request still holds their values (arrays, string
 phasync
 json
 --INI--
+phasync.memo_min_ns=0
 phasync.memo_memory=128K
 --FILE--
 <?php

@@ -6,6 +6,7 @@ json
 --SKIPIF--
 <?php if (!function_exists('pcntl_fork')) die('skip needs pcntl_fork'); ?>
 --INI--
+phasync.memo_min_ns=0
 phasync.memo_memory=64M
 --FILE--
 <?php

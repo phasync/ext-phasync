@@ -158,6 +158,7 @@ PHP_INI_BEGIN()
 	PHP_INI_ENTRY("phasync.test_unknown_layouts", "0", PHP_INI_SYSTEM, phasync_update_test_unknown_layouts)
 	PHP_INI_ENTRY("phasync.keywords", "0", PHP_INI_SYSTEM, NULL)
 	PHP_INI_ENTRY("phasync.memo_memory", "16M", PHP_INI_SYSTEM, NULL) /* memo.c; 0: off */
+	PHP_INI_ENTRY("phasync.memo_min_ns", "500", PHP_INI_SYSTEM, NULL)   /* memo.c: a json_decode()/unserialize() faster than this is not stored */
 	PHP_INI_ENTRY("phasync.stat_cache", "0", PHP_INI_SYSTEM, NULL)    /* statcache.c */
 	PHP_INI_ENTRY("phasync.stat_cache_watches", "4096", PHP_INI_SYSTEM, NULL)
 	PHP_INI_ENTRY("phasync.test_stat_cache_untrusted", "0", PHP_INI_SYSTEM, NULL)   /* tests: no filesystem is trusted */

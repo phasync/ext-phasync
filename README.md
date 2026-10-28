@@ -502,7 +502,8 @@ them without the work:
   directory's stat; never on kernel file systems (`/proc`).
 
 Something is stored the second time the process produces it, and only from a call that raised no
-error, warning or deprecation, so a hit behaves as the native call did. Entries live in persistent
+error, warning or deprecation, so a hit behaves as the native call did. A `json_decode()` or `unserialize()`
+that took less than `phasync.memo_min_ns` (default 500) is not stored: decoding again costs no more. Entries live in persistent
 memory as immutable values, laid out as opcache lays out literal arrays: a hit costs nothing, and
 PHP copies the value when it is written to. An object-mode result is handed out as new `stdClass`
 instances each time, sharing every table and string that holds no object.
