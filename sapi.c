@@ -136,6 +136,7 @@ typedef struct phasync_request {
 	zend_string *name;                 /* PHP_SAPI and php_sapi_name() while installed */
 	zval sapi;
 	zend_function *m_write, *m_read, *m_send_headers, *m_flush, *m_connection_aborted;
+	void *zl;                          /* zlib's module globals while the request is not installed */
 	phasync_req_state st;              /* the live globals while the request is not installed */
 	zval server;                       /* request_info()'s 'server': $_SERVER's own entries */
 	php_stream *prebody;               /* a POST body read before PHP parses it (phasync_req_startup()) */
@@ -146,6 +147,8 @@ typedef struct phasync_request {
 
 #define PHASYNC_REQ_KEY(ctx) ((zend_ulong) (uintptr_t) (ctx))
 
+static zend_module_entry *phasync_zl_mod;          /* ext/zlib, if loaded: its globals are swapped as raw blocks */
+static void *phasync_zl_live, *phasync_zl_root;
 static phasync_request *phasync_req_cur;           /* installed; NULL: the process's own */
 static phasync_req_state phasync_req_root;
 static HashTable phasync_req_fibers;               /* fiber context -> its request */
@@ -198,6 +201,11 @@ static void phasync_req_install(phasync_request *in)
 #define PHASYNC_REQ_LOAD(name, live) live = st->name;
 		PHASYNC_REQ_FILTER_FIELDS(PHASYNC_REQ_LOAD)
 #undef PHASYNC_REQ_LOAD
+	}
+
+	if (phasync_zl_mod) {
+		memcpy(out ? out->zl : phasync_zl_root, phasync_zl_live, phasync_zl_mod->globals_size);
+		memcpy(phasync_zl_live, in ? in->zl : phasync_zl_root, phasync_zl_mod->globals_size);
 	}
 
 #ifdef PHASYNC_HAVE_SESSION
@@ -419,6 +427,9 @@ static void phasync_req_release(phasync_request *r)
 		FREE_HASHTABLE(r->bodies_replaced);
 	}
 	phasync_req_state_free(&r->st);
+	if (r->zl) {
+		efree(r->zl);
+	}
 	if (r->prebody) {
 		php_stream_free(r->prebody, PHP_STREAM_FREE_CLOSE);
 	}
@@ -760,6 +771,9 @@ static void phasync_req_finalize(phasync_request *r)
 #ifdef PHASYNC_HAVE_SESSION
 	phasync_req_session_end();
 #endif
+	if (phasync_zl_mod) {
+		phasync_zl_mod->request_shutdown_func(phasync_zl_mod->type, phasync_zl_mod->module_number);
+	}
 	php_output_set_status(PHP_OUTPUT_DISABLED);
 	r->ended = true;
 	phasync_req_restore_exception(ex);
@@ -880,6 +894,10 @@ static void phasync_req_startup(phasync_request *r)
 				ag->armed = ag->auto_global_callback(ag->name);
 			}
 		}
+		/* zlib's RINIT, now that $_SERVER exists: it starts output compression */
+		if (phasync_zl_mod && !EG(exception)) {
+			phasync_zl_mod->request_startup_func(phasync_zl_mod->type, phasync_zl_mod->module_number);
+		}
 	} zend_catch {
 		bailed = true;
 	} zend_end_try();
@@ -927,6 +945,10 @@ ZEND_FUNCTION(phasync_ext_sapi)
 	r->m_connection_aborted = PHASYNC_REQ_METHOD("connection_aborted");
 	m_request_info = PHASYNC_REQ_METHOD("request_info");
 #undef PHASYNC_REQ_METHOD
+	if (phasync_zl_mod) {
+		r->zl = emalloc(phasync_zl_mod->globals_size);
+		memcpy(r->zl, phasync_zl_live, phasync_zl_mod->globals_size);   /* the root's: nothing is installed */
+	}
 	r->refcount = 2;                  /* this call + the calling fiber's membership */
 	ZVAL_COPY(&r->sapi, sapi);
 	phasync_req_state_init(&r->st);
@@ -1060,6 +1082,14 @@ static void phasync_req_minit(void)
 
 static void phasync_req_rinit(void)
 {
+	if (!phasync_zl_root && (phasync_zl_mod = zend_hash_str_find_ptr(&module_registry, ZEND_STRL("zlib")))) {
+#ifdef ZTS
+		phasync_zl_live = TSRMG_BULK(*phasync_zl_mod->globals_id_ptr, void *);
+#else
+		phasync_zl_live = phasync_zl_mod->globals_ptr;
+#endif
+		phasync_zl_root = calloc(1, phasync_zl_mod->globals_size);
+	}
 	zend_internal_function *f;
 
 	zend_hash_init(&phasync_req_fibers, 8, NULL, NULL, 0);
