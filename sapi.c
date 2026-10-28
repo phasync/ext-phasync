@@ -153,6 +153,7 @@ static uint32_t phasync_req_count;                 /* requests alive */
 
 static char *phasync_req_cli_name;
 static zval phasync_req_cli_val;
+static int phasync_req_cli_as_text;
 static zend_constant *phasync_req_sapi_const;
 
 static size_t (*phasync_req_ub_write_prev)(const char *str, size_t len);
@@ -238,12 +239,15 @@ static void phasync_req_install(phasync_request *in)
 	if (in) {
 		if (!out) {
 			phasync_req_cli_name = sapi_module.name;
+			phasync_req_cli_as_text = sapi_module.phpinfo_as_text;
+			sapi_module.phpinfo_as_text = 0;
 			ZVAL_COPY_VALUE(&phasync_req_cli_val, &phasync_req_sapi_const->value);
 		}
 		sapi_module.name = ZSTR_VAL(in->name);
 		ZVAL_STR(&phasync_req_sapi_const->value, in->name);
 	} else {
 		sapi_module.name = phasync_req_cli_name;
+		sapi_module.phpinfo_as_text = phasync_req_cli_as_text;
 		ZVAL_COPY_VALUE(&phasync_req_sapi_const->value, &phasync_req_cli_val);
 	}
 }
