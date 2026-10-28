@@ -35,7 +35,7 @@ json_decode($json, true, 512, JSON_BIGINT_AS_STRING);                           
 echo 'bypassed: ', $hits() - $h1, " hits\n";
 $h2 = $hits();
 json_decode($small, true); json_decode($small, true); json_decode($small, true);
-echo 'a small text: ', $hits() - $h2, " hit\n";
+echo 'a text that decodes in under 500 ns: ', $hits() - $h2, " hits\n";
 
 $pid = pcntl_fork();
 if ($pid === 0) {
@@ -51,5 +51,5 @@ equal: true, hits: 1
 store unchanged by a write: true
 error before: yes, after a hit: none
 bypassed: 0 hits
-a small text: 1 hit
+a text that decodes in under 500 ns: 0 hits
 forked process: hit, equal

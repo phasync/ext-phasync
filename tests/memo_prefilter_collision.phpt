@@ -22,11 +22,12 @@ for ($i = 0; $i < 4; $i++) {
 $h = $s()['json_hits'];
 echo 'json: ', var_export($ok, true), ', hits ', $h > 0 ? 'yes' : 'no', "\n";
 
-$x = serialize(['k' => 1, 'v' => $mid, 'z' => 'a']);
-$y = serialize(['k' => 2, 'v' => $mid, 'z' => 'b']);
+$big = range(1, 100); // heavy enough to decode in over 500 ns, so the result is stored
+$x = serialize(['k' => 1, 'v' => $big, 'z' => 'a']);
+$y = serialize(['k' => 2, 'v' => $big, 'z' => 'b']);
 $ok = strlen($x) === strlen($y);
 for ($i = 0; $i < 4; $i++) {
-    $ok = $ok && unserialize($x) === ['k' => 1, 'v' => $mid, 'z' => 'a'] && unserialize($y) === ['k' => 2, 'v' => $mid, 'z' => 'b'];
+    $ok = $ok && unserialize($x) === ['k' => 1, 'v' => $big, 'z' => 'a'] && unserialize($y) === ['k' => 2, 'v' => $big, 'z' => 'b'];
 }
 // 5 hits, not 4: $y shares $x's fingerprint, so its first sight counts as its second and stores it
 echo 'unserialize: ', var_export($ok, true), ', hits ', $s()['unserialize_hits'], "\n";

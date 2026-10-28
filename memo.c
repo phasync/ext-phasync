@@ -22,6 +22,10 @@
  * hit still compares the whole text. */
 
 #include "ext/json/php_json.h"
+#include "Zend/zend_hrtime.h"
+
+/* A decode faster than this is not worth a cache entry: a hit costs about as much */
+#define PHASYNC_MEMO_MIN_NS 500
 
 #define PHASYNC_MEMO_MAX_FILE (4 * 1024 * 1024)
 
@@ -463,8 +467,10 @@ static ZEND_NAMED_FUNCTION(phasync_memo_json_decode)
 		return;
 	}
 	phasync_memo_misses++;
+	zend_hrtime_t t0 = zend_hrtime();
 	phasync_memo_orig_json_decode(INTERNAL_FUNCTION_PARAM_PASSTHRU);
-	if (!EG(exception) && errors == phasync_memo_errors && (Z_TYPE_P(return_value) == IS_ARRAY || Z_TYPE_P(return_value) == IS_OBJECT)
+	if (zend_hrtime() - t0 >= PHASYNC_MEMO_MIN_NS
+	 && !EG(exception) && errors == phasync_memo_errors && (Z_TYPE_P(return_value) == IS_ARRAY || Z_TYPE_P(return_value) == IS_OBJECT)
 	 && phasync_memo_second_time((print = print ? print : phasync_memo_print(Z_STR_P(text))) ^ (t == &phasync_memo_arrays))) {
 		phasync_memo_put(t, Z_STR_P(text), print, return_value);
 	}
@@ -702,8 +708,10 @@ static ZEND_NAMED_FUNCTION(phasync_memo_unserialize)
 		return;
 	}
 	phasync_memo_misses++;
+	zend_hrtime_t t0 = zend_hrtime();
 	phasync_memo_orig_unserialize(INTERNAL_FUNCTION_PARAM_PASSTHRU);
-	if ((Z_TYPE_P(return_value) == IS_ARRAY || Z_TYPE_P(return_value) == IS_OBJECT) && !EG(exception) && errors == phasync_memo_errors
+	if (zend_hrtime() - t0 >= PHASYNC_MEMO_MIN_NS
+	 && (Z_TYPE_P(return_value) == IS_ARRAY || Z_TYPE_P(return_value) == IS_OBJECT) && !EG(exception) && errors == phasync_memo_errors
 	 && phasync_memo_second_time((print = print ? print : phasync_memo_print(Z_STR_P(data))) ^ 2)) {
 		HashTable seen;
 		bool objects = false, plain;
