@@ -6,9 +6,11 @@
  * uploaded files) and the session are the coroutine's own, swapped in and out
  * when fibers switch. Fibers started inside belong to the request of the
  * fiber that starts them. What would go to the client goes to the $sapi
- * object, as a SAPI would receive it. Nothing else is isolated: not statics,
- * declarations, other globals, shutdown functions or error handlers. exit() is
- * not intercepted.
+ * object, as a SAPI would receive it. register_shutdown_function() inside a
+ * request registers for it: they run when $code returns, throws or exit()s,
+ * before its output is flushed and its session written. Nothing else is
+ * isolated: not statics, declarations, other globals or error handlers. exit()
+ * is not intercepted.
  *
  * A request starts as PHP's own do (phasync_req_startup()): its body is read for
  * a POST form, and $_GET, $_POST, $_COOKIE, $_FILES, $_SERVER and $_REQUEST are
@@ -104,6 +106,7 @@
 	X(argc,               SG(request_info).argc) \
 	X(argv,               SG(request_info).argv) \
 	X(request_time,       SG(global_request_time)) \
+	X(shutdown_fns,       BG(user_shutdown_function_names)) \
 	X(connection_status,  PG(connection_status)) \
 	X(ignore_user_abort,  PG(ignore_user_abort))
 
@@ -383,6 +386,13 @@ static void phasync_req_state_free(phasync_req_state *st)
 	}
 	if (st->cookie_data) {
 		efree(st->cookie_data);
+	}
+	if (st->shutdown_fns) {             /* registered after the request ended, or a fatal error stopped them */
+		HashTable *live = BG(user_shutdown_function_names);
+
+		BG(user_shutdown_function_names) = st->shutdown_fns;
+		php_free_shutdown_functions();
+		BG(user_shutdown_function_names) = live;
 	}
 	zval_ptr_dtor(&st->if_get);
 	zval_ptr_dtor(&st->if_post);
@@ -757,13 +767,44 @@ static void phasync_req_session_end(void)
 }
 #endif
 
-/* The end of a request: the output buffers flushed (removable or not), the
- * headers if no output sent them, and its session written and closed. */
+/* One of the request's shutdown functions, as php_call_shutdown_functions() calls
+ * it; an exception or exit() stops the list and leaves sapi() as one from $code. */
+static int phasync_req_shutdown_call(zval *zv)
+{
+	php_shutdown_function_entry *e = Z_PTR_P(zv);
+
+#if PHP_VERSION_ID >= 80500
+	zend_call_known_fcc(&e->fci_cache, NULL, e->param_count, e->params, NULL);
+#else
+	zval rv;
+
+	e->fci.retval = &rv;
+	zend_call_function(&e->fci, &e->fci_cache);
+	zval_ptr_dtor(&rv);
+#endif
+	return EG(exception) ? ZEND_HASH_APPLY_STOP : ZEND_HASH_APPLY_KEEP;
+}
+
+/* The end of a request, in php_request_shutdown()'s order: its shutdown functions,
+ * the output buffers flushed (removable or not), the headers if no output sent
+ * them, and its session written and closed. */
 static void phasync_req_finalize(phasync_request *r)
 {
 	zend_object *ex = EG(exception);
 
 	EG(exception) = NULL;
+	if (BG(user_shutdown_function_names)) {
+		zend_try {
+			zend_hash_apply(BG(user_shutdown_function_names), phasync_req_shutdown_call);
+		} zend_catch {
+			if (!r->aborted) {      /* a fatal error: as one in $code */
+				zend_bailout();
+			}
+		} zend_end_try();
+		phasync_req_restore_exception(ex);
+		ex = EG(exception);
+		EG(exception) = NULL;
+	}
 	php_output_end_all();
 	if (!SG(headers_sent)) {
 		sapi_send_headers();
@@ -774,6 +815,7 @@ static void phasync_req_finalize(phasync_request *r)
 	if (phasync_zl_mod) {
 		phasync_zl_mod->request_shutdown_func(phasync_zl_mod->type, phasync_zl_mod->module_number);
 	}
+	php_free_shutdown_functions();
 	php_output_set_status(PHP_OUTPUT_DISABLED);
 	r->ended = true;
 	phasync_req_restore_exception(ex);

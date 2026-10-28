@@ -128,8 +128,12 @@ final class Suspension extends \Exception
  * their own output buffers, response headers, session and request body (php://input,
  * request_parse_body(), uploaded files), so many requests can run concurrently
  * in one worker. This is the SAPI-facing side of a web server written in PHP.
- * Nothing else is isolated: not statics, declarations, other globals, shutdown
- * functions or error handlers.
+ * register_shutdown_function() inside $code registers for the request: those
+ * run in registration order, in the request, when $code returns, throws or
+ * exit()s, before its output is flushed, its headers sent and its session
+ * written. An exception or exit() in one skips the rest and leaves sapi() as
+ * one from $code would. Nothing else is isolated: not statics, declarations,
+ * other globals or error handlers.
  *
  * Before $code runs, PHP's own request startup creates $_GET, $_POST, $_COOKIE,
  * $_FILES, $_SERVER and $_REQUEST from request_info(), as under php-fpm:
