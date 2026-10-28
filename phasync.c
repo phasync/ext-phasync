@@ -43,6 +43,7 @@
 #include "coroutine.c"
 #include "sapi.c"
 #include "keywords.c"
+#include "pseudo_fiber.c"
 
 /* Swerve's script handler (Swerve::accept()) requires an app's entry file
  * (e.g. WordPress's index.php) from inside a method, so its top-level
@@ -231,6 +232,7 @@ static PHP_MINIT_FUNCTION(phasync)
 	php_stream_stdio_ops.write = phasync_stdio_write;
 	php_stream_stdio_ops.set_option = phasync_stdio_set_option;
 	phasync_next_minit();
+	phasync_pf_minit(module_number);
 	return SUCCESS;
 }
 
@@ -451,6 +453,7 @@ static PHP_RSHUTDOWN_FUNCTION(phasync)
 		zend_hash_clean(&PHASYNC_G(ledgers));
 	}
 	phasync_suspension_rshutdown();
+	phasync_pf_rshutdown();
 	if (phasync_scope_bundled) {
 		scope_module_entry.request_shutdown_func(type, module_number);
 	}
