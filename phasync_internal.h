@@ -4,6 +4,7 @@
 
 #include "phasync_php.h"
 #include "phasync_arginfo.h"
+#include "zend_hrtime.h"
 #include "ext/filter/php_filter.h"
 #include "main/php_variables.h"
 
@@ -189,6 +190,15 @@ ZEND_BEGIN_MODULE_GLOBALS(phasync)
 	HashTable wrapped_ops_cache;  /* (uintptr_t)orig_ops  -> php_stream_ops*     */
 	uint64_t sw_pipe_nowait;      /* phasync_wrapped_read/write took the preadv2()/pwritev2() RWF_NOWAIT path */
 	uint64_t sw_pipe_fcntl_fallback; /* ...fell back to the O_NONBLOCK toggle (no RWF_NOWAIT support) */
+	zend_long gc_grace;           /* INI: phasync.gc_grace (ms), 0 = off; see gc.c */
+	/* gc.c, per request: zeroed from gc_stamp to gc_st_ns at RINIT */
+	uint32_t *gc_stamp;           /* handle -> first seen (ms), PHASYNC_GC_FREED, top bit: on gc_hidden */
+	uint32_t *gc_hidden;          /* handles hidden from a collection, until old (from gc_hidden_head) */
+	uint32_t *gc_freed;           /* handles std free_obj marked PHASYNC_GC_FREED, below gc_prev_top */
+	uint32_t gc_cap, gc_prev_top, gc_hidden_head, gc_hidden_n, gc_hidden_cap, gc_freed_n, gc_freed_cap, gc_now;
+	bool gc_on, gc_in, gc_hide;
+	zend_hrtime_t gc_start;
+	uint64_t gc_st_collections, gc_st_hidden, gc_st_rerooted, gc_st_ns;
 ZEND_END_MODULE_GLOBALS(phasync)
 
 ZEND_DECLARE_MODULE_GLOBALS(phasync)

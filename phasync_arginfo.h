@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 89b724e3796fd87f8b7bc63230aa6468e2ac8b98 */
+ * Stub hash: f326065fecc8e5e20ee929c30799cffb28c04eca */
 
 /* Hand-maintained: never regenerate it with gen_stub (PHP 8.3 has no frameless
  * infos in ZEND_RAW_FENTRY, PHASYNC_RAW_FENTRY adapts). */
@@ -36,6 +36,7 @@ ZEND_END_ARG_INFO()
 #define arginfo_phasync_ext_memo_stats arginfo_phasync_ext_io_stats
 
 #define arginfo_phasync_ext_stat_cache_stats arginfo_phasync_ext_io_stats
+#define arginfo_phasync_ext_gc_grace_stats arginfo_phasync_ext_io_stats
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_phasync_ext_Suspension___construct, 0, 0, 0)
 ZEND_END_ARG_INFO()
@@ -82,6 +83,7 @@ ZEND_FUNCTION(phasync_ext_include_global);
 ZEND_FUNCTION(phasync_ext_io_stats);
 ZEND_FUNCTION(phasync_ext_memo_stats);
 ZEND_FUNCTION(phasync_ext_stat_cache_stats);
+ZEND_FUNCTION(phasync_ext_gc_grace_stats);
 ZEND_METHOD(phasync_ext_Suspension, __construct);
 ZEND_METHOD(phasync_ext_Suspension, poll);
 ZEND_METHOD(phasync_ext_Suspension, manage);
@@ -103,6 +105,7 @@ static const zend_function_entry ext_functions[] = {
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "io_stats"), zif_phasync_ext_io_stats, arginfo_phasync_ext_io_stats, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "memo_stats"), zif_phasync_ext_memo_stats, arginfo_phasync_ext_memo_stats, 0, NULL, NULL)
 	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "stat_cache_stats"), zif_phasync_ext_stat_cache_stats, arginfo_phasync_ext_stat_cache_stats, 0, NULL, NULL)
+	PHASYNC_RAW_FENTRY(ZEND_NS_NAME("phasync\\ext", "gc_grace_stats"), zif_phasync_ext_gc_grace_stats, arginfo_phasync_ext_gc_grace_stats, 0, NULL, NULL)
 	ZEND_FE_END
 };
 
