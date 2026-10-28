@@ -43,6 +43,7 @@
 #include "coroutine.c"
 #include "sapi.c"
 #include "keywords.c"
+#include "memo.c"
 
 /* Swerve's script handler (Swerve::accept()) requires an app's entry file
  * (e.g. WordPress's index.php) from inside a method, so its top-level
@@ -155,6 +156,7 @@ PHP_INI_BEGIN()
 		fs_offload_types, zend_phasync_globals, phasync_globals)
 	PHP_INI_ENTRY("phasync.test_unknown_layouts", "0", PHP_INI_SYSTEM, phasync_update_test_unknown_layouts)
 	PHP_INI_ENTRY("phasync.keywords", "0", PHP_INI_SYSTEM, NULL)
+	PHP_INI_ENTRY("phasync.memo_memory", "0", PHP_INI_SYSTEM, NULL)   /* memo.c; 0: off */
 PHP_INI_END()
 
 /* Scope: bundled fiber-interop/ext-scope (scope/scope.c, a separate translation
@@ -187,6 +189,7 @@ static PHP_MINIT_FUNCTION(phasync)
 		return FAILURE;
 	}
 	REGISTER_INI_ENTRIES();
+	phasync_memo_startup();
 	if (INI_BOOL("phasync.keywords")) {
 		phasync_keywords_minit();
 	}
@@ -345,6 +348,7 @@ static PHP_MSHUTDOWN_FUNCTION(phasync)
 		sapi_module.ub_write = phasync_ub_write_orig;
 	}
 	phasync_next_mshutdown();
+	phasync_memo_shutdown();
 	UNREGISTER_INI_ENTRIES();
 	return SUCCESS;
 }
@@ -473,6 +477,7 @@ static ZEND_MODULE_POST_ZEND_DEACTIVATE_D(phasync)
 	while (phasync_pollers) {
 		phasync_poller_free(phasync_pollers);
 	}
+	phasync_memo_request_end();
 	return SUCCESS;
 }
 

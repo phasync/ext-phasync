@@ -149,6 +149,8 @@ function sapi(
 function run_next(string $script): void;   // CLI: run $script once more as a fresh request when this one ends
 
 function dup2(mixed $stream, int $fd): void;   // as dup2(2): $fd stays open across requests (run_next()), owned by no PHP resource
+
+function memo_stats(): array;   // the memo's counters: hits, stored, evicted, bytes, graveyard_bytes, ...
 ```
 
 ```php
@@ -483,6 +485,33 @@ readable when called (a `ValueError` otherwise), and the SAPI must be the CLI (a
 `dup2($stream, $fd)` puts `$stream`'s descriptor on `$fd` (as `dup2(2)`), owned by no PHP resource
 afterwards, so it survives request shutdown and is there in every later `run_next()` run — the way a
 `pcntl_fork()`ed worker keeps a channel to its parent on a fixed descriptor across restarts.
+
+### Memo: `json_decode()`, `unserialize()`, `file_get_contents()`, `scandir()`, `glob()` across requests
+
+With `phasync.memo_memory` set (`PHP_INI_SYSTEM`, for example `64M`; the default `0` is off), the
+process remembers results, so a later request, in the same `run_next()` run or a later one, gets
+them without the work:
+
+- `json_decode($json, true)` and `json_decode($json)`, default depth and flags, keyed by the text;
+- `unserialize($data)` (no options, or `allowed_classes` alone) when the result holds no references
+  and no objects but `stdClass`, each once; with `allowed_classes`, only object-free results;
+- `file_get_contents($path)` of a regular file up to 4 MB, whole or from an offset and/or for a
+  length, checked by a `stat()` each call (device, inode, size, mtime, ctime), so a changed file is
+  read again;
+- `scandir()` and `glob()` (wildcards in the last path component only), keyed by the listed
+  directory's stat; never on kernel file systems (`/proc`).
+
+Something is stored the second time the process produces it, and only from a call that raised no
+error, warning or deprecation, so a hit behaves as the native call did. Entries live in persistent
+memory as immutable values, laid out as opcache lays out literal arrays: a hit costs nothing, and
+PHP copies the value when it is written to. An object-mode result is handed out as new `stdClass`
+instances each time, sharing every table and string that holds no object.
+
+Least recently used entries go past `phasync.memo_memory`, counted in the bytes the entries take.
+A request may still use an evicted value, so it is freed when the request ends. Within one request
+that never ends (a Swerve async worker), evicted entries are kept up to `phasync.memo_memory` more;
+past that, nothing new is stored until a request ends. The memo never takes more than twice
+`phasync.memo_memory`. `memo_stats()` reports it.
 
 ### Preemption: `Suspension::setPreemptInterval()`
 

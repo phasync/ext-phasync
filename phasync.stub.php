@@ -257,6 +257,16 @@ function include_global(string $file): mixed {}
  */
 function io_stats(): array {}
 
+/**
+ * The memo's counters (phasync.memo_memory; README, Memo): hits per function, 'misses',
+ * 'stored', 'evicted', 'refused' (not stored: too large, or the graveyard full until the
+ * request ends), 'entries', 'bytes' (what the entries take), 'graveyard_bytes' (evicted,
+ * freed when the request ends) and 'limit'. Process-wide, never reset.
+ *
+ * @return array{enabled: bool, json_hits: int, file_hits: int, unserialize_hits: int, dir_hits: int, misses: int, stored: int, evicted: int, refused: int, entries: int, bytes: int, graveyard_bytes: int, limit: int}
+ */
+function memo_stats(): array {}
+
 }
 
 namespace phasync {
