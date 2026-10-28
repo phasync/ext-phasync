@@ -85,13 +85,13 @@ Co\run(function () use ($d) {
     $f->throw(new DomainException('boom'));
     check('throw() into a parked task', 'caught boom' === $f->getReturn(), $f->getReturn());
 
-    // 4. throw() into a task blocked in a hooked call: deviation, Swoole's exception
+    // 4. throw() into a task blocked in a hooked call: the task gets $e, Swoole's exception as previous
     $f = $d->create(function () {
         try {
             usleep(2_000_000);
             return 'slept';
         } catch (Throwable $e) {
-            return get_class($e);
+            return [get_class($e), $e->getMessage(), get_class($e->getPrevious() ?? new stdClass())];
         }
     });
     $f->start();
@@ -100,7 +100,77 @@ Co\run(function () use ($d) {
     while (!$f->isTerminated()) {
         Co::sleep(0.001);
     }
-    check('throw() interrupts a hooked call (sees Swoole\'s CanceledException)', Swoole\Coroutine\CanceledException::class === $f->getReturn() && microtime(true) - $t < 0.1, $f->getReturn());
+    $r = $f->getReturn();
+    check('throw() into a hooked call delivers $e, quickly', [DomainException::class, 'cancel', Swoole\Coroutine\CanceledException::class] === $r && microtime(true) - $t < 0.1, json_encode($r));
+
+    // 4b. a wait Swoole cannot interrupt (FIFO open, in its thread pool): $e is thrown when it ends
+    $fifo = '/tmp/claude-1000/pf-test.fifo';
+    @unlink($fifo);
+    exec('mkfifo ' . escapeshellarg($fifo));
+    $f = $d->create(function () use ($fifo) {
+        try {
+            $h = fopen($fifo, 'r');             // blocks in Swoole's thread pool
+            return 'not thrown';
+        } catch (DomainException $e) {
+            return 'thrown: ' . $e->getMessage();
+        }
+    });
+    $f->start();
+    Co::sleep(0.02);
+    $f->throw(new DomainException('late'));
+    go(fn() => fclose(fopen($fifo, 'w')));      // let the open complete
+    $t = microtime(true);
+    while (!$f->isTerminated() && microtime(true) - $t < 2) {
+        Co::sleep(0.005);
+    }
+    check('a wait Swoole can\'t interrupt throws $e when it ends', $f->isTerminated() && 'thrown: late' === $f->getReturn(), $f->isTerminated() ? $f->getReturn() : 'still running');
+    @unlink($fifo);
+
+    // 4c. structured concurrency in miniature: one child fails, its sibling blocked in a socket read is
+    // cancelled with the parent's exception, the parent sees the first error
+    $parent = $d->create(function () use ($d) {
+        [$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+        $self = Fiber::getCurrent();
+        $children = [
+            $d->create(function () use ($a) {
+                try {
+                    fread($a, 10);              // nobody writes: blocks until cancelled
+                    return 'read';
+                } catch (RuntimeException $e) {
+                    return 'sibling cancelled: ' . $e->getMessage();
+                }
+            }),
+            $d->create(function () use ($self) {
+                usleep(20_000);
+                $e = new LogicException('child failed');
+                if ($self->isSuspended()) {
+                    $self->throw($e);           // report to the parent
+                }
+            }),
+        ];
+        foreach ($children as $c) {
+            $c->start();
+        }
+        try {
+            Fiber::suspend();                   // wait for the children
+        } catch (LogicException $first) {
+            foreach ($children as $c) {
+                if (!$c->isTerminated()) {
+                    $c->throw(new RuntimeException('frame failed: ' . $first->getMessage()));
+                }
+            }
+            while (!$children[0]->isTerminated()) {
+                usleep(1000);
+            }
+            return [$first->getMessage(), $children[0]->getReturn()];
+        }
+    });
+    $parent->start();
+    while (!$parent->isTerminated()) {
+        Co::sleep(0.005);
+    }
+    $r = $parent->getReturn();
+    check('a failing child cancels its sibling\'s hooked read with our exception', ['child failed', 'sibling cancelled: frame failed: child failed'] === $r, json_encode($r));
 
     // 5. exceptions: escape from start() when synchronous; getReturn() FiberError either way
     $f = $d->create(fn() => throw new LogicException('sync'));
@@ -138,7 +208,7 @@ Co\run(function () use ($d) {
 
     // 8. handles are released
     Co::sleep(0.01);
-    unset($f, $tasks, $task, $self);
+    unset($f, $tasks, $task, $self, $parent);
     gc_collect_cycles();
     check('finished tasks\' handles are freed', 0 === $d->count(), $d->count() . ' left');
 });

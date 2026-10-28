@@ -11,8 +11,8 @@ use Swoole\Coroutine as Co;
  *  - Fiber::suspend($v) in a task: Co::yield(); $fiber->resume($v) / throw($e): Co::resume($cid).
  *  - start()/resume() return the next Fiber::suspend() value, or null when the task instead blocked in a
  *    Swoole-hooked call (it then continues on its own, like a fiber parked by phasync's loop).
- *  - throw() into a task blocked in a hooked call cancels that call: the task sees
- *    Swoole\Coroutine\CanceledException, not $e (Swoole can only throw its own exception there).
+ *  - throw() into a task blocked in a hooked call cancels that call, and the extension swaps Swoole's
+ *    CanceledException for $e. A wait Swoole can't interrupt (a FIFO open) throws $e when it ends.
  */
 final class SwooleFibers
 {
@@ -31,10 +31,12 @@ final class SwooleFibers
     {
         $fiber = \phasync\pseudo_fiber();
         $this->tasks[$fiber] = (object) ['fn' => $fn, 'status' => 'init', 'cid' => 0, 'out' => null, 'in' => null,
-            'ret' => null, 'exc' => null, 'excSeen' => false];
+            'ret' => null, 'exc' => null, 'excSeen' => false, 'pending' => null];
 
         return $fiber;
     }
+
+
 
     public function count(): int
     {
@@ -77,7 +79,9 @@ final class SwooleFibers
     {
         $t = $this->task($fiber);
         if ('running' === $t->status && $t->cid !== Co::getCid()) {
-            Co::cancel($t->cid, true);   // blocked in a hooked call
+            if (!\phasync\swoole_cancel($t->cid, $e)) {   // blocked in a hooked call: it throws $e there
+                $t->pending = $e;                             // otherwise the next park throws it
+            }
 
             return $this->settle($t);
         }
@@ -113,6 +117,11 @@ final class SwooleFibers
         $fiber = $this->current() ?? \phasync\fiber_error('Cannot suspend outside of fiber');
         $t = $this->tasks[$fiber];
         unset($fiber);   // a parked task must not keep its own handle alive
+        if ($t->pending) {
+            $e = $t->pending;
+            $t->pending = null;
+            throw $e;
+        }
         $t->status = 'suspended';
         $t->out = $value;
         Co::yield();
