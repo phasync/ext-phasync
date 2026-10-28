@@ -532,6 +532,12 @@ static bool phasync_never_cfunc(const zend_function *fn)
 	const zend_class_entry *ce = fn->common.scope;
 	const zend_module_entry *m = fn->internal_function.module;
 
+	if (name == NULL) {
+		/* A C frame with no name: not a function PHP code can call, such as the frame Swoole puts
+		 * at the bottom of each of its coroutines. What it does around its callee is unknown, and
+		 * Swoole's coroutines are not fibers: never suspend across it. */
+		return true;
+	}
 	if (m) {
 		for (size_t i = 0; i < sizeof(modules) / sizeof(*modules); i++) {
 			if (strcmp(m->name, modules[i]) == 0) {
@@ -567,7 +573,7 @@ static bool phasync_stream_op_call(const zend_execute_data *callee, const zend_e
 	static const char *const methods[] = { "stream_open", "stream_read", "stream_write" };
 
 	return from && from->func && !ZEND_USER_CODE(from->func->type) && !from->func->common.scope
-	 && PHASYNC_STR_IN(from->func->common.function_name, ops)
+	 && from->func->common.function_name && PHASYNC_STR_IN(from->func->common.function_name, ops)
 	 && PHASYNC_STR_IN(callee->func->common.function_name, methods);
 }
 
