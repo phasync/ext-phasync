@@ -2036,16 +2036,42 @@ static ZEND_NAMED_FUNCTION(phasync_socket_connect_override)
  * activity or the timeout (capped by curl's own timer, as curl_multi_wait() caps
  * it) park on curl's sockets, found through libcurl itself: ext/curl links it, we
  * resolve it at runtime. The CURLM* is php_curlm's first field. With no socket to
- * wait on (none yet, or none curl_multi_fdset() can show), sleep between probes
- * (1ms, doubling to 20ms). The probe calls the function again by name, which
+ * wait on, or when curl_multi_fdset() may miss one (an fd >= FD_SETSIZE), wake
+ * between probes as a sleep would (1ms, doubling to 20ms). The probe calls the function again by name, which
  * (select_depth > 0) goes straight to the original. */
 typedef struct { int fd; short events; short revents; } phasync_curl_waitfd;
 static int (*phasync_curlm_waitfds)(void *, phasync_curl_waitfd *, unsigned int, unsigned int *);   /* 8.8+ */
 static int (*phasync_curlm_fdset)(void *, fd_set *, fd_set *, fd_set *, int *);
 static int (*phasync_curlm_timeout)(void *, long *);
 
-/* A mux fd watching curl's sockets, or -1 if there are none. */
-static int phasync_curl_mux(void *multi)
+/* Whether no descriptor of the process can be >= FD_SETSIZE, so that
+ * curl_multi_fdset() shows all of curl's. Linux: the fd table's size (FDSize),
+ * which grows past any fd ever used and never shrinks. */
+static bool phasync_fds_fit_fdset(void)
+{
+#ifdef __linux__
+	static bool grown;
+	char buf[2048], *f;
+	ssize_t n;
+	int fd;
+
+	if (grown || (fd = open("/proc/self/status", O_RDONLY | O_CLOEXEC)) < 0) {
+		return false;
+	}
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	buf[n > 0 ? n : 0] = '\0';
+	grown = !(f = strstr(buf, "\nFDSize:")) || atol(f + 8) > FD_SETSIZE;
+	return !grown;
+#else
+	struct rlimit rl;
+	return getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur <= FD_SETSIZE;
+#endif
+}
+
+/* A mux fd watching curl's sockets, or -1 if there are none. *complete: they
+ * are all in it. */
+static int phasync_curl_mux(void *multi, bool *complete)
 {
 	int mux = -1, n = 0;
 
@@ -2055,6 +2081,7 @@ static int phasync_curl_mux(void *multi)
 		if (phasync_curlm_waitfds(multi, fds, 64, &count) != 0 || count == 0 || (mux = phasync_mux_open()) < 0) {
 			return -1;
 		}
+		*complete = true;
 		for (unsigned int i = 0; i < count; i++) {
 			n += phasync_mux_add(mux, fds[i].fd, (fds[i].events & 1 ? PHASYNC_EV_IN : 0)
 				| (fds[i].events & 2 ? PHASYNC_EV_PRI : 0) | (fds[i].events & 4 ? PHASYNC_EV_OUT : 0)) == 0;
@@ -2066,6 +2093,7 @@ static int phasync_curl_mux(void *multi)
 		if (phasync_curlm_fdset(multi, &r, &w, &e, &max) != 0 || max < 0 || (mux = phasync_mux_open()) < 0) {
 			return -1;
 		}
+		*complete = phasync_fds_fit_fdset();
 		for (int fd = 0; fd <= max; fd++) {
 			uint32_t ev = (FD_ISSET(fd, &r) ? PHASYNC_EV_IN : 0) | (FD_ISSET(fd, &w) ? PHASYNC_EV_OUT : 0)
 				| (FD_ISSET(fd, &e) ? PHASYNC_EV_PRI : 0);
@@ -2109,6 +2137,7 @@ static void phasync_curl_select(zval *zmh, double timeout, zval *return_value)
 	for (;;) {
 		double left;
 		int mux;
+		bool complete;
 		ZVAL_UNDEF(&ret);
 		PHASYNC_G(select_depth)++;
 		call_user_function(NULL, NULL, &fn, &ret, 2, args);
@@ -2117,13 +2146,15 @@ static void phasync_curl_select(zval *zmh, double timeout, zval *return_value)
 		 || (left = deadline - phasync_now()) <= 0) {
 			break;                           /* activity, an error (-1), or time up */
 		}
-		if (multi && (mux = phasync_curl_mux(multi)) >= 0) {
-			int w = phasync_wait_fd(PHASYNC_READ, NULL, mux, left);
+		if (multi && (mux = phasync_curl_mux(multi, &complete)) >= 0) {
+			/* A socket fdset() cannot show may be missing: wake as the backoff would. */
+			int w = phasync_wait_fd(PHASYNC_READ, NULL, mux, complete ? left : MIN(left, usec / 1e6));
 			close(mux);
 			if (w == PHASYNC_WAIT_ERROR) {
 				ZVAL_UNDEF(&ret);
 				break;                       /* exception pending */
 			}
+			usec = complete ? usec : MIN(usec * 2, 20000);
 			continue;
 		}
 		if (phasync_call_sleep(MIN(usec, (zend_long) (left * 1e6) + 1)) < 0) {

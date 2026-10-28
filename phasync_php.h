@@ -88,6 +88,7 @@
 #include <limits.h>
 #include <dirent.h>
 #include <sys/wait.h>
+#include <sys/resource.h>
 #include <dlfcn.h>
 #ifdef __ELF__
 #include <link.h>
