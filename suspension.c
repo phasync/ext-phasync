@@ -629,6 +629,17 @@ ZEND_METHOD(phasync_ext_Suspension, getScope)
 	RETURN_COPY(&s->scope);
 }
 
+ZEND_METHOD(phasync_ext_Suspension, getFiber)
+{
+	phasync_susp *s;
+
+	ZEND_PARSE_PARAMETERS_NONE();
+	s = phasync_this_susp(ZEND_THIS);
+	if (s->fiber) {
+		RETURN_OBJ_COPY(&s->fiber->std);
+	}
+}
+
 ZEND_METHOD(phasync_ext_Suspension, isReady)
 {
 	ZEND_PARSE_PARAMETERS_NONE();

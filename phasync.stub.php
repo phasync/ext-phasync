@@ -98,6 +98,14 @@ final class Suspension extends \Exception
      */
     public function getScope(): \Scope {}
 
+    /**
+     * The managed fiber this Suspension suspended, so a loop that polls
+     * Suspensions needs no fiber table of its own. null once the wait is over
+     * (resumed, thrown into, or the fiber resumed directly): the Suspension no
+     * longer holds the fiber.
+     */
+    public function getFiber(): ?\Fiber {}
+
     /** True once poll() has found it ready; resume() may be called then. */
     public function isReady(): bool {}
 

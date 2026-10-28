@@ -58,6 +58,9 @@ ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_class_phasync_ext_Suspension_getScope, 0, 0, Scope, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_class_phasync_ext_Suspension_getFiber, 0, 0, Fiber, 1)
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Suspension_isReady, 0, 0, _IS_BOOL, 0)
 ZEND_END_ARG_INFO()
 
@@ -80,6 +83,7 @@ ZEND_METHOD(phasync_ext_Suspension, readable);
 ZEND_METHOD(phasync_ext_Suspension, writable);
 ZEND_METHOD(phasync_ext_Suspension, suspend);
 ZEND_METHOD(phasync_ext_Suspension, getScope);
+ZEND_METHOD(phasync_ext_Suspension, getFiber);
 ZEND_METHOD(phasync_ext_Suspension, isReady);
 ZEND_METHOD(phasync_ext_Suspension, resume);
 ZEND_METHOD(phasync_ext_Suspension, throw);
@@ -102,6 +106,7 @@ static const zend_function_entry class_phasync_ext_Suspension_methods[] = {
 	ZEND_ME(phasync_ext_Suspension, writable, arginfo_class_phasync_ext_Suspension_writable, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC)
 	ZEND_ME(phasync_ext_Suspension, suspend, arginfo_class_phasync_ext_Suspension_suspend, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC)
 	ZEND_ME(phasync_ext_Suspension, getScope, arginfo_class_phasync_ext_Suspension_getScope, ZEND_ACC_PUBLIC)
+	ZEND_ME(phasync_ext_Suspension, getFiber, arginfo_class_phasync_ext_Suspension_getFiber, ZEND_ACC_PUBLIC)
 	ZEND_ME(phasync_ext_Suspension, isReady, arginfo_class_phasync_ext_Suspension_isReady, ZEND_ACC_PUBLIC)
 	ZEND_ME(phasync_ext_Suspension, resume, arginfo_class_phasync_ext_Suspension_resume, ZEND_ACC_PUBLIC)
 	ZEND_ME(phasync_ext_Suspension, throw, arginfo_class_phasync_ext_Suspension_throw, ZEND_ACC_PUBLIC)
