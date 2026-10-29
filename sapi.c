@@ -690,19 +690,11 @@ static ZEND_NAMED_FUNCTION(phasync_req_connection_status_override)
 
 /* ---- fibers: a fiber belongs to the request of the fiber that starts it ---- */
 
-bool scope_fn_bound_elsewhere(const zend_function *fn);   /* scope/scope.c */
-
-/* ...unless it runs in another Scope: a Fiber whose callable is a Scope::bind() closure
- * bound to a Scope other than the one current at start() (an event loop's service, bound
- * to the root Scope) runs as process code, with that Scope's state and not the request's,
- * and doesn't keep the request alive (swerve#102). */
 static void phasync_req_fiber_init(zend_fiber_context *ctx)
 {
 	phasync_request *r;
 
-	if (phasync_req_count && (r = phasync_req_of(EG(current_fiber_context)))
-	 && !(ctx->kind == zend_ce_fiber
-	      && scope_fn_bound_elsewhere(((zend_fiber *) ((char *) ctx - XtOffsetOf(zend_fiber, context)))->fci_cache.function_handler))) {
+	if (phasync_req_count && (r = phasync_req_of(EG(current_fiber_context)))) {
 		zend_hash_index_add_new_ptr(&phasync_req_fibers, PHASYNC_REQ_KEY(ctx), r);
 		r->refcount++;
 	}
