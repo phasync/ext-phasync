@@ -556,7 +556,10 @@ look alive, so nothing live is freed; an object hidden while young is put back i
 the root buffer once it is old, so its garbage is still collected then. Age is
 counted per request (each `run_next()` run starts over), and collections in the
 request's shutdown hide nothing. The trade: cyclic garbage lives up to the grace
-period longer. With `0`, nothing is installed. `phasync\ext\gc_grace_stats()`
+period longer. It helps when collections run while a lot of young data is live:
+many concurrent requests suspended in one worker (the event loop collects at idle
+moments and every 0.5 s while busy), or a large request that triggers collections
+itself. With `0`, nothing is installed. `phasync\ext\gc_grace_stats()`
 returns the request's counters.
 
 ### Preemption: `Suspension::setPreemptInterval()`
