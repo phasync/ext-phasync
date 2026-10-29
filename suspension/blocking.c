@@ -2163,13 +2163,11 @@ static ZEND_NAMED_FUNCTION(phasync_conn_sqlite3)
 }
 
 #ifdef PHASYNC_HAVE_PDO
-/* PDO and PDOStatement: the pdo_dbh_t (persistent PDO objects share one), for
- * the pgsql and sqlite drivers. */
+/* PDO (and its driver subclasses) and PDOStatement: the pdo_dbh_t (persistent
+ * PDO objects share one), for every driver. */
 static void *phasync_pdo_conn(pdo_dbh_t *dbh)
 {
-	return dbh && dbh->driver && (strcmp(dbh->driver->driver_name, "pgsql") == 0
-	                           || strcmp(dbh->driver->driver_name, "mysql") == 0
-	                           || strcmp(dbh->driver->driver_name, "sqlite") == 0) ? dbh : NULL;
+	return dbh && dbh->driver ? dbh : NULL;
 }
 
 static ZEND_NAMED_FUNCTION(phasync_conn_pdo)
@@ -2286,11 +2284,20 @@ static void phasync_conn_hooks_install(void)
 		phasync_sqlite3_ce[1] = zend_hash_str_find_ptr(CG(class_table), ZEND_STRL("sqlite3result"));
 	}
 #ifdef PHASYNC_HAVE_PDO
-	phasync_conn_hook_class(ZEND_STRL("pdo"), phasync_conn_pdo);
-	phasync_conn_hook_class(ZEND_STRL("pdo\\pgsql"), phasync_conn_pdo);
-	phasync_conn_hook_class(ZEND_STRL("pdo\\sqlite"), phasync_conn_pdo);
+	{
+		zend_class_entry *pdo = zend_hash_str_find_ptr(CG(class_table), ZEND_STRL("pdo")), *ce;
+
+		if (pdo) {
+			ZEND_HASH_MAP_FOREACH_PTR(CG(class_table), ce) {
+				if (ce->type == ZEND_INTERNAL_CLASS && instanceof_function(ce, pdo)) {
+					ZEND_HASH_MAP_FOREACH_PTR(&ce->function_table, f) {
+						phasync_conn_hook(f, phasync_conn_pdo);
+					} ZEND_HASH_FOREACH_END();
+				}
+			} ZEND_HASH_FOREACH_END();
+		}
+	}
 	phasync_conn_hook_class(ZEND_STRL("pdostatement"), phasync_conn_pdostmt);
-	phasync_conn_hook_class(ZEND_STRL("pdo\\mysql"), phasync_conn_pdo);
 #endif
 #ifdef PHASYNC_HAVE_MYSQLI
 	{
