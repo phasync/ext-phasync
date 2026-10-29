@@ -5,12 +5,12 @@ phasync
 --SKIPIF--
 <?php
 if (!class_exists('Fiber')) die('skip requires Fibers');
-if ((int) @shell_exec('ulimit -n') < 4000) die('skip needs ulimit -n >= 4000');
+if ((int) @shell_exec('ulimit -n') < 10000) die('skip needs ulimit -n >= 10000');
 ?>
 --FILE--
 <?php
 require __DIR__ . '/loop.inc';
-$n = 1200;   // past PHASYNC_SELECT_THRESHOLD watched descriptors
+$n = 4200;   // past PHASYNC_SELECT_THRESHOLD watched descriptors
 $loop = new Loop;
 $file = tempnam(sys_get_temp_dir(), 'pss');
 file_put_contents($file, str_repeat('z', 300000));

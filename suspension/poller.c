@@ -395,10 +395,10 @@ static int phasync_reg_arm(phasync_poller *p, phasync_reg *r)
 /* Below this many watched descriptors the poller waits with select(); at it,
  * it switches to epoll for the rest of the process. Measured on black: select()
  * costs ~25 ns per watched fd per call, epoll ~1 us (ADD+DEL) per connection
- * plus 87 ns per epoll_wait(). So select() wins under churn and at low counts
- * (busy churn favoured it up to 5000); at 1024 a mostly idle set costs ~26 us
- * per wake-up, and above that the idle (long-poll) penalty grows unbounded. */
-#define PHASYNC_SELECT_THRESHOLD 1024
+ * plus 87 ns per epoll_wait(), so select() wins with few sockets and under
+ * churn; the measured crossover lies between 2000 and 7000 watched fds, and
+ * 4096 is the owner's pick in that range. */
+#define PHASYNC_SELECT_THRESHOLD 4096
 
 /* Bytes for a descriptor bitmap holding bit `maxfd`, in whole unsigned longs:
  * the kernel reads and writes the sets in words. */

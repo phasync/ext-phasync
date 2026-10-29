@@ -6,7 +6,7 @@ phasync
 <?php
 if (!class_exists('Fiber')) die('skip requires Fibers');
 $lim = @shell_exec('bash -lc "ulimit -n" 2>/dev/null');
-if ((int)$lim < 3000) die("skip needs ulimit -n >= 3000");
+if ((int)$lim < 10000) die("skip needs ulimit -n >= 10000");
 ?>
 --FILE--
 <?php
@@ -14,12 +14,12 @@ require __DIR__ . '/loop.inc';
 
 // A socketpair's registration is level-triggered and stays in the Poller
 // after its wait resolves (poller.c: "a registration lives as long as its
-// stream"), so waiting on 1100 of them in turn -- far below the switching
+// stream"), so waiting on 4200 of them in turn -- far below the switching
 // threshold at any one time -- still grows the Poller's watched-fd count
 // past it, crossing from select() to epoll partway through. The reader and
 // writer run concurrently, so some waits are already parked when the switch
 // happens, mid-flight, and must still be woken correctly afterward.
-$n = 1100;
+$n = 4200;
 $pairs = [];
 for ($i = 0; $i < $n; $i++) {
     $pairs[] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
