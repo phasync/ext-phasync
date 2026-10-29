@@ -2089,7 +2089,8 @@ static void phasync_conn_call(void *conn, INTERNAL_FUNCTION_PARAMETERS)
 }
 
 /* Memcached: the libmemcached handle, the first member of php-memcached's object
- * (persistent_id shares one handle between objects). */
+ * (persistent_id shares one handle between objects). Redis: the RedisSock, the
+ * first member of phpredis's object. */
 static ZEND_NAMED_FUNCTION(phasync_conn_memcached)
 {
 	zend_object *obj = Z_OBJ_P(ZEND_THIS);
@@ -2276,6 +2277,7 @@ static void phasync_conn_hooks_install(void)
 		return;                          /* no reserved slot left: stock behaviour */
 	}
 	phasync_conn_hook_class(ZEND_STRL("memcached"), phasync_conn_memcached);
+	phasync_conn_hook_class(ZEND_STRL("redis"), phasync_conn_memcached);
 	if ((phasync_conn_sqlite3_on = phasync_layouts_known() && zend_hash_str_exists(CG(class_table), ZEND_STRL("sqlite3")))) {
 		phasync_conn_hook_class(ZEND_STRL("sqlite3"), phasync_conn_sqlite3);
 		phasync_conn_hook_class(ZEND_STRL("sqlite3stmt"), phasync_conn_sqlite3);
