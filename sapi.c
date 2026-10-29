@@ -225,12 +225,17 @@ static void phasync_req_install(phasync_request *in)
 		/* $_SESSION: php_session_track_init() wires it as its own
 		 * reference-sharing zval in EG(symbol_table), not an indirect
 		 * alias of http_session_vars -- kept in sync here, the same way
-		 * ext/session keeps the two together when a session starts. If
+		 * ext/session keeps the two together when a session starts: the
+		 * incoming request's started session replaces it, and the outgoing
+		 * request's leaves with it. A $_SESSION that is no session's (an
+		 * assignment without session_start(), or what ext-scope put in for
+		 * the incoming Scope) is not ours and stays (swerve#104). If
 		 * nothing ever called session_start(), there is no "_SESSION"
 		 * entry yet, nothing to sync, and the next one to start a
 		 * session creates it (session.c's own doing). */
 		{
 			zval *sym = zend_hash_str_find(&EG(symbol_table), "_SESSION", sizeof("_SESSION") - 1);
+			zval *left = &(out ? &out->st : &phasync_req_root)->sess_http_vars;
 
 			if (sym) {
 				zval old;
@@ -238,9 +243,12 @@ static void phasync_req_install(phasync_request *in)
 				if (Z_TYPE_P(sym) == IS_INDIRECT) {
 					sym = Z_INDIRECT_P(sym);
 				}
-				old = *sym;
-				ZVAL_COPY(sym, &phasync_ps->http_session_vars);
-				zval_ptr_dtor(&old);
+				if (!Z_ISUNDEF(phasync_ps->http_session_vars)
+				 || (Z_ISREF_P(sym) && Z_ISREF_P(left) && Z_REF_P(sym) == Z_REF_P(left))) {
+					old = *sym;
+					ZVAL_COPY(sym, &phasync_ps->http_session_vars);
+					zval_ptr_dtor(&old);
+				}
 			}
 		}
 	}
