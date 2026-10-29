@@ -53,6 +53,12 @@ static ZEND_INI_MH(phasync_update_test_unknown_layouts)
 	return SUCCESS;
 }
 
+static ZEND_INI_MH(phasync_update_allow_persistent)
+{
+	phasync_allow_persistent = ZSTR_LEN(new_value) > 0 && ZSTR_VAL(new_value)[0] != '0';
+	return SUCCESS;
+}
+
 PHP_INI_BEGIN()
 	STD_PHP_INI_ENTRY("phasync.thread_pool_size", "8", PHP_INI_SYSTEM, OnUpdateLong,
 		thread_pool_size, zend_phasync_globals, phasync_globals)
@@ -60,6 +66,7 @@ PHP_INI_BEGIN()
 	STD_PHP_INI_ENTRY("phasync.fs_offload_types", "", PHP_INI_ALL, phasync_update_fs_offload_types,
 		fs_offload_types, zend_phasync_globals, phasync_globals)
 	PHP_INI_ENTRY("phasync.test_unknown_layouts", "0", PHP_INI_SYSTEM, phasync_update_test_unknown_layouts)
+	PHP_INI_ENTRY("phasync.allow_persistent", "0", PHP_INI_SYSTEM, phasync_update_allow_persistent)   /* blocking.c */
 PHP_INI_END()
 
 static void phasync_globals_ctor(zend_phasync_globals *phasync_globals)

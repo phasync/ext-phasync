@@ -41,7 +41,7 @@ race('PDO query, PDO query', fn() => $p->query($sleep)->fetch(PDO::FETCH_NUM)[1]
 race('PDO query, statement execute', fn() => $p->query($sleep)->fetch(PDO::FETCH_NUM)[1], fn() => $s->execute());
 race('two connections', fn() => $p->query($sleep)->fetch(PDO::FETCH_NUM)[1], fn() => pg_pdo()->query("SELECT pg_sleep(0.1), 'other'")->fetchColumn(1));
 echo 'afterwards: ', $p->query('SELECT 42')->fetchColumn(), "\n";
-CHILD, args: '-d ' . escapeshellarg('error_reporting=E_ALL & ~E_DEPRECATED')); // the default-link case is about concurrency, not its deprecation
+CHILD, args: '-d phasync.allow_persistent=1 -d ' . escapeshellarg('error_reporting=E_ALL & ~E_DEPRECATED')); // pg_pconnect()'s guard needs persistence allowed; the default-link case is about concurrency, not its deprecation
 ?>
 --EXPECT--
 pg_query, pg_query

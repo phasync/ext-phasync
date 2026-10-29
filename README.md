@@ -324,15 +324,34 @@ VFS's own. A connection opened with an explicit VFS keeps it.
 
 A connection serves one call at a time: a second command written while the first
 waits for its reply would interleave on its socket. So in a managed fiber a
-coroutine entering a `Memcached` handle, a PostgreSQL connection (a
-`PgSql\Connection`, its results and large objects, or the default link), a
-`SQLite3` database (its statements and results) or a pgsql or sqlite `PDO` (its
-statements) while another coroutine is in a call on it gets a `LogicException`:
-"Concurrent operations on the same resource are not supported". Objects sharing
-one persistent connection count as one. Calls made from the callbacks of a call on
-the same connection nest. For `pg_*()` and `SQLite3` the check reads those extensions'
+coroutine entering a connection while another coroutine is in a call on it gets a
+`LogicException`: "Concurrent operations on the same resource are not supported".
+Nothing waits, and the first call finishes undisturbed. This covers every `PDO`
+driver (and its statements), `mysqli` (its statements and results; a `MYSQLI_ASYNC`
+query keeps the connection busy until it is reaped), a PostgreSQL connection (a
+`PgSql\Connection`, its results and large objects, or the default link), `SQLite3`
+(its statements and results), `Memcached` and phpredis's `Redis`. Objects sharing
+one connection count as one. Calls made from the callbacks of a call on the same
+connection nest. For `pg_*()` and `SQLite3` the check reads those extensions'
 internals at layouts known for PHP 8.3-8.6; on another version it is off (stock
 behaviour, waits still cooperative), and `phpinfo()` says so.
+
+A stream has one reader at a time the same way: a coroutine reading a stream
+(`fread()`, `fgets()`, `stream_get_contents()`, ...) while another coroutine is
+suspended reading it gets the same `LogicException`, as a second
+`Suspension::readable()` waiter does. Writes are not refused: writers wait their turn.
+
+### Persistent connections are refused
+
+PHP keeps persistent connections for the whole process, keyed by their parameters,
+so two concurrent requests could get the same database session, and one's
+transaction or rollback would act on the other's. Asking for one throws a
+`LogicException` instead of connecting: `PDO::ATTR_PERSISTENT`, `pg_pconnect()`, a
+mysqli host starting with `p:`, `pfsockopen()`, `stream_socket_client()` with
+`STREAM_CLIENT_PERSISTENT`, `new Memcached($persistent_id)`, and phpredis's
+`pconnect()`/`popen()`. Use a non-persistent connection, or a pool. A process that
+serves one request at a time can set `phasync.allow_persistent=1` (`PHP_INI_SYSTEM`,
+default `0`) to get PHP's behaviour back.
 
 ### Filesystem and DNS (thread pool)
 

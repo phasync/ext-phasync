@@ -68,6 +68,9 @@ $r2 = redis_on();   // the cancelled BLPOP's reply may still be due on $r: a fre
 $r2->set("$u.e", 'after');
 $log[] = 'next: ' . $r2->get("$u.e");
 echo implode(', ', $log), "\n";
+
+// pconnect() would share the connection between requests: refused (phasync.allow_persistent=0).
+try { (new Redis)->pconnect(REDIS_HOST, REDIS_PORT); echo "pconnect: allowed\n"; } catch (LogicException $e) { echo 'pconnect: ', strstr($e->getMessage(), ' was asked', true), "\n"; }
 CHILD);
 $d = implode(' ', array_map(fn($e) => '-d extension=' . escapeshellarg($e), explode(',', $exts)));
 $phasync = realpath(ini_get('extension_dir') . '/phasync.so');
@@ -79,3 +82,4 @@ second: Concurrent operations on the same resource are not supported, first: tim
 after: x
 a: v, b: pushed
 owner: RedisException (LoopCancelled), next: after
+pconnect: Redis::pconnect()

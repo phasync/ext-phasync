@@ -120,6 +120,9 @@ ZEND_BEGIN_MODULE_GLOBALS(phasync)
 	php_stream_transport_factory orig_ssl;
 	void (*orig_proc_open)(INTERNAL_FUNCTION_PARAMETERS);
 	void (*orig_sleep)(INTERNAL_FUNCTION_PARAMETERS);
+	zend_internal_function *persist_fn[12];   /* blocking.c: the persistent-connect functions refused, */
+	zif_handler persist_orig[12];             /* and their handlers before */
+	int persist_n;
 	void (*orig_usleep)(INTERNAL_FUNCTION_PARAMETERS);
 	void (*orig_header_register_callback)(INTERNAL_FUNCTION_PARAMETERS);
 	zend_function *header_cb;   /* the registered header callback: never suspends (poller.c) */

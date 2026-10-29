@@ -2245,6 +2245,117 @@ static ZEND_NAMED_FUNCTION(phasync_conn_mysqli)
 }
 #endif
 
+/* ---- persistent connections: refused ----------------------------------------
+ *
+ * PHP keeps persistent connections process-wide (EG(persistent_list)), keyed by their
+ * parameters, so two concurrent requests in one process could get the same database
+ * session, and one's transaction or rollback would act on the other's. Asking for one
+ * throws instead, unless phasync.allow_persistent=1 (a process that serves one request
+ * at a time). The connect functions are wrapped on top of the connection guards above. */
+static bool phasync_allow_persistent;   /* phasync.allow_persistent */
+
+static zif_handler phasync_persist_orig(zend_execute_data *execute_data)
+{
+	for (int i = 0; i < PHASYNC_G(persist_n); i++) {
+		if (PHASYNC_G(persist_fn)[i] == &EX(func)->internal_function) {
+			return PHASYNC_G(persist_orig)[i];
+		}
+	}
+	return NULL;   /* not reached: only installed functions get here */
+}
+
+/* Does this call ask for a persistent connection? */
+static bool phasync_persist_asked(zend_execute_data *execute_data)
+{
+	const char *fn = ZSTR_VAL(EX(func)->common.function_name);
+	zend_class_entry *ce = EX(func)->common.scope;
+	uint32_t argc = ZEND_NUM_ARGS();
+	zval *a;
+
+	if (!ce) {
+		if (strcmp(fn, "pfsockopen") == 0 || strcmp(fn, "pg_pconnect") == 0) {
+			return true;
+		}
+		if (strcmp(fn, "stream_socket_client") == 0) {   /* (address, &errno, &errstr, timeout, flags) */
+			return argc >= 5 && Z_TYPE_P(a = ZEND_CALL_ARG(execute_data, 5)) == IS_LONG && (Z_LVAL_P(a) & 1 /* STREAM_CLIENT_PERSISTENT */);
+		}
+		/* mysqli_connect(host, ...), mysqli_real_connect(link, host, ...): a "p:" host */
+		a = argc >= 1 && strcmp(fn, "mysqli_connect") == 0 ? ZEND_CALL_ARG(execute_data, 1)
+		  : argc >= 2 ? ZEND_CALL_ARG(execute_data, 2) : NULL;
+		return a && Z_TYPE_P(a) == IS_STRING && strncmp(Z_STRVAL_P(a), "p:", 2) == 0;
+	}
+	if (zend_string_equals_literal_ci(ce->name, "mysqli")) {   /* __construct/connect/real_connect(host, ...) */
+		return argc >= 1 && Z_TYPE_P(a = ZEND_CALL_ARG(execute_data, 1)) == IS_STRING && strncmp(Z_STRVAL_P(a), "p:", 2) == 0;
+	}
+	if (zend_string_equals_literal_ci(ce->name, "memcached")) {   /* __construct(?string $persistent_id) */
+		return argc >= 1 && Z_TYPE_P(a = ZEND_CALL_ARG(execute_data, 1)) == IS_STRING && Z_STRLEN_P(a) > 0;
+	}
+	if (zend_string_equals_literal_ci(ce->name, "redis")) {   /* pconnect(), popen() */
+		return true;
+	}
+	/* PDO::__construct/connect(dsn, user, password, options): options[PDO::ATTR_PERSISTENT] */
+	if (argc >= 4 && Z_TYPE_P(a = ZEND_CALL_ARG(execute_data, 4)) == IS_ARRAY) {
+		zval *p = zend_hash_index_find(Z_ARRVAL_P(a), 12 /* PDO::ATTR_PERSISTENT */);
+
+		return p && zend_is_true(p);
+	}
+	return false;
+}
+
+static ZEND_NAMED_FUNCTION(phasync_persist_refuse)
+{
+	if (phasync_persist_asked(execute_data)) {
+		zend_class_entry *ce = EX(func)->common.scope;
+
+		zend_throw_exception_ex(spl_ce_LogicException, 0,
+			"%s%s%s() was asked for a persistent connection, which concurrent requests in this process would share: "
+			"use a non-persistent connection or a pool (phasync.allow_persistent=1 allows it)",
+			ce ? ZSTR_VAL(ce->name) : "", ce ? "::" : "", ZSTR_VAL(EX(func)->common.function_name));
+		return;
+	}
+	phasync_persist_orig(execute_data)(INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+
+static void phasync_persist_wrap(zend_function *f)
+{
+	if (f && f->type == ZEND_INTERNAL_FUNCTION && PHASYNC_G(persist_n) < (int) (sizeof(PHASYNC_G(persist_fn)) / sizeof(*PHASYNC_G(persist_fn)))) {
+		PHASYNC_G(persist_fn)[PHASYNC_G(persist_n)] = &f->internal_function;
+		PHASYNC_G(persist_orig)[PHASYNC_G(persist_n)++] = f->internal_function.handler;
+		f->internal_function.handler = phasync_persist_refuse;
+	}
+}
+
+static void phasync_persist_install(void)
+{
+	static const char *const funcs[] = { "pfsockopen", "stream_socket_client", "pg_pconnect", "mysqli_connect", "mysqli_real_connect" };
+	static const char *const methods[][2] = {
+		{ "pdo", "__construct" }, { "pdo", "connect" }, { "mysqli", "__construct" }, { "mysqli", "connect" },
+		{ "mysqli", "real_connect" }, { "memcached", "__construct" }, { "redis", "pconnect" }, { "redis", "popen" } };
+
+	if (PHASYNC_G(persist_n) > 0 || phasync_allow_persistent) {   /* in place already (no restore since) */
+		return;
+	}
+	for (size_t i = 0; i < sizeof(funcs) / sizeof(*funcs); i++) {
+		phasync_persist_wrap(zend_hash_str_find_ptr(CG(function_table), funcs[i], strlen(funcs[i])));
+	}
+	for (size_t i = 0; i < sizeof(methods) / sizeof(*methods); i++) {
+		zend_class_entry *ce = zend_hash_str_find_ptr(CG(class_table), methods[i][0], strlen(methods[i][0]));
+
+		if (ce) {
+			phasync_persist_wrap(zend_hash_str_find_ptr(&ce->function_table, methods[i][1], strlen(methods[i][1])));
+		}
+	}
+}
+
+/* In reverse, so each handler gets back exactly what it replaced. */
+static void phasync_persist_restore(void)
+{
+	while (PHASYNC_G(persist_n) > 0) {
+		PHASYNC_G(persist_n)--;
+		PHASYNC_G(persist_fn)[PHASYNC_G(persist_n)]->handler = PHASYNC_G(persist_orig)[PHASYNC_G(persist_n)];
+	}
+}
+
 /* Route a function through handler, remembering its original. */
 static void phasync_conn_hook(zend_function *f, zif_handler handler)
 {
@@ -2560,6 +2671,7 @@ static void phasync_install_hooks(void)
 		f->handler = phasync_pclose_override_sync;
 	}
 	phasync_conn_hooks_install();
+	phasync_persist_install();
 	PHASYNC_G(hooks_installed) = 1;
 }
 
@@ -2698,6 +2810,7 @@ static void phasync_restore_hooks(void)
 	if (PHASYNC_G(orig_pclose) && (f = phasync_find_ifunc("pclose", sizeof("pclose") - 1))) {
 		f->handler = PHASYNC_G(orig_pclose);
 	}
+	phasync_persist_restore();
 	phasync_conn_hooks_restore();
 	PHASYNC_G(hooks_installed) = 0;
 }

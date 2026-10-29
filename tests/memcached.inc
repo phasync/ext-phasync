@@ -15,7 +15,7 @@ require ' . var_export(__DIR__ . '/sink.inc', true) . ';
 const MEMC_SERVER = ' . var_export("$host:$port", true) . ';
 ' . $body);
     $phasync = realpath(ini_get('extension_dir') . '/phasync.so');
-    passthru(escapeshellarg(PHP_BINARY) . ' -d extension=' . escapeshellarg($phasync)
+    passthru(escapeshellarg(PHP_BINARY) . ' -d phasync.allow_persistent=1 -d extension=' . escapeshellarg($phasync)   // the persistent_id case
         . ' -d extension=' . escapeshellarg($so) . ' ' . escapeshellarg($child) . ' 2>&1');
     unlink($child);
 }
