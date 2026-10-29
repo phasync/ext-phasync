@@ -683,7 +683,8 @@ static ssize_t phasync_wrapped_write(php_stream *stream, const char *buf, size_t
 	php_socket_t fd = phasync_stream_fd(stream);
 	int dir = phasync_writing();
 	int flags;
-	bool is_sock;
+	bool is_sock, turned = false;
+	size_t done = 0;
 
 	if (fd == -1) {
 		return orig->write(stream, buf, count);
@@ -693,34 +694,54 @@ static ssize_t phasync_wrapped_write(php_stream *stream, const char *buf, size_t
 		return orig->write(stream, buf, count);
 	}
 	is_sock = phasync_sock_data(stream) != NULL;
-	double deadline = -1;              /* per op call = per fill */
+	double deadline = -1;              /* per fill */
+	/* The whole buffer is written under the stream's write turn, as a blocking write is
+	 * natively: another coroutine's bytes never land in between. */
+	if (PHASYNC_G(wturns)) {
+		turned = true;
+		if (phasync_cooperate(dir | PHASYNC_TURNQ, stream, fd, &deadline) != PHASYNC_COOP_RETRY) {
+			phasync_write_turn_end(phasync_scope_top()->poller, stream, fd);
+			return -1;
+		}
+		deadline = -1;
+	}
 	for (;;) {
 		ssize_t n;
 		int err, c;
 		if (is_sock) {
-			n = phasync_send_nowait(fd, buf, count, flags);
+			n = phasync_send_nowait(fd, buf + done, count - done, flags);
 		} else {
-			n = phasync_pipe_write_nowait(fd, buf, count, flags);
+			n = phasync_pipe_write_nowait(fd, buf + done, count - done, flags);
 		}
 		if (n >= 0) {
-			return n;
+			done += n;
+			if (done == count) {
+				break;
+			}
+			deadline = -1;
+			continue;
 		}
 		if (errno == EINTR) {
 			continue;
 		}
 		if (errno != EAGAIN && errno != EWOULDBLOCK) {
-			return -1;
+			break;
 		}
 		err = errno;
-		c = phasync_cooperate(dir, stream, fd, &deadline);
+		turned = true;
+		c = phasync_cooperate(dir | PHASYNC_TURN, stream, fd, &deadline);
 		if (c == PHASYNC_COOP_RETRY) {
 			continue;
 		}
 		if (c == PHASYNC_COOP_TIMEOUT) {
-			phasync_write_timeout_notice(stream, count, err);
+			phasync_write_timeout_notice(stream, count - done, err);
 		}
-		return -1;
+		break;
 	}
+	if (turned) {
+		phasync_write_turn_end(phasync_scope_top()->poller, stream, fd);
+	}
+	return done == count || (done > 0 && !EG(exception)) ? (ssize_t) done : -1;
 }
 
 /* Delegate-mode ops for streams whose bytes must go through the original op

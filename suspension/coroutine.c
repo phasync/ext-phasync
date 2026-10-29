@@ -14,7 +14,7 @@ static void phasync_ledger_settle(phasync_ledger *l)
 	}
 	if (l->wait_p) {
 		phasync_chan_purge(l->wait_p->chan, l->wait_slot);
-		phasync_wait_settle(l->wait_p, l->wait_idx, l->wait_stream, l->wait_fd, l->wait_slot, l->wait_dupfd);
+		phasync_wait_settle(l->wait_p, l->wait_idx, l->wait_stream, l->wait_fd, l->wait_slot, l->wait_dupfd, l, true);
 		l->wait_p = NULL;
 	}
 	if (l->inflight) {
