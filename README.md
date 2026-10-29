@@ -562,6 +562,12 @@ moments and every 0.5 s while busy), or a large request that triggers collection
 itself. With `0`, nothing is installed. `phasync\ext\gc_grace_stats()`
 returns the request's counters.
 
+Measured (2026-10-29, one process, phasync's loop; each request builds 20,000
+objects and waits on I/O twice): when the request's objects form cycles,
+`gc_grace=100` saves 12% CPU per request at 50 concurrent requests and 4% at 10, for
+45-70% more peak memory, since cyclic garbage waits out the grace period; when they
+don't, it changes nothing at 1, 10 or 50. That is why it is off by default.
+
 ### Preemption: `Suspension::setPreemptInterval()`
 
 `Suspension::setPreemptInterval($seconds)` suspends a managed fiber that has run
