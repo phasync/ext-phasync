@@ -5,6 +5,7 @@ phasync
 --SKIPIF--
 <?php if (!class_exists('Fiber')) die('skip requires Fibers'); ?>
 --INI--
+phasync.gc_grace=0
 phasync.fs_offload=all
 --FILE--
 <?php
