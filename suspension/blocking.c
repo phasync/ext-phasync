@@ -1,4 +1,4 @@
-/* Included by phasync.c (single translation unit); not compiled on its own. */
+/* Included by suspension/unit.c (suspension/'s translation unit); not compiled on its own. */
 
 /* Overrides that make blocking calls cooperative: sleep()/usleep()/time_nanosleep()/time_sleep_until(), proc_open() and the process family, DNS, and Memcached -- plus the override install/call machinery they share. */
 
@@ -2256,7 +2256,7 @@ static void phasync_conn_hooks_restore(void)
 	zend_hash_clean(&PHASYNC_G(conn_busy));
 }
 
-static zend_internal_function *phasync_find_ifunc(const char *name, size_t len)
+zend_internal_function *phasync_find_ifunc(const char *name, size_t len)
 {
 	zend_function *f = zend_hash_str_find_ptr(CG(function_table), name, len);
 	if (f && f->type == ZEND_INTERNAL_FUNCTION) {
@@ -2619,7 +2619,7 @@ static void phasync_restore_hooks(void)
  * process still makes the real flock() wait, as under php-fpm. */
 static ps_module phasync_ps_files;
 static const ps_module *phasync_ps_files_orig;
-static php_ps_globals *phasync_ps;   /* ext/session's globals, NULL if it isn't loaded */
+php_ps_globals *phasync_ps;   /* ext/session's globals, NULL if it isn't loaded */
 static ZEND_INI_MH((*phasync_ps_save_handler_orig));
 
 /* mod_files' path for a session id (ps_files_path_create()), from session.save_path

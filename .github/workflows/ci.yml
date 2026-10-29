@@ -56,6 +56,21 @@ jobs:
             -c "ALTER SYSTEM SET ssl_key_file = '/etc/ssl/private/ssl-cert-snakeoil.key'" \
             -c "ALTER SYSTEM SET ssl = on" -c "SELECT pg_reload_conf()"
 
+      - name: suspension/ is one-way (its includes stay inside it; the rest uses only suspension.h)
+        run: |
+          bad=0
+          for f in suspension/*.[ch]; do
+            for inc in $(sed -n 's/^[[:space:]]*#[[:space:]]*include[[:space:]]*"\([^"]*\)".*/\1/p' "$f"); do
+              [ "$inc" = config.h ] && continue
+              case $inc in ../*|/*) ;; *) [ -e "suspension/$inc" ] && continue; [ -e "$inc" ] || continue ;; esac
+              echo "::error file=$f::includes \"$inc\" from outside suspension/"; bad=1
+            done
+          done
+          if grep -nE '#[[:space:]]*include[[:space:]]*"suspension/' -- *.c *.h | grep -v '"suspension/suspension.h"'; then
+            echo "::error::only suspension/suspension.h may be included from outside suspension/"; bad=1
+          fi
+          exit $bad
+
       - name: Build
         run: |
           phpize

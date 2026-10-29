@@ -1,4 +1,4 @@
-/* Included by phasync.c (single translation unit); not compiled on its own. */
+/* Included by suspension/unit.c (suspension/'s translation unit); not compiled on its own. */
 
 /* The thread pool that runs blocking syscalls off PHP's own thread, and the task lifecycle (phasync_task_*) submitted to it. */
 

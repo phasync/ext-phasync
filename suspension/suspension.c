@@ -1,4 +1,4 @@
-/* Included by phasync.c (single translation unit); not compiled on its own. */
+/* Included by suspension/unit.c (suspension/'s translation unit); not compiled on its own. */
 
 /* phasync\ext\Suspension: how a blocking call in a managed fiber reaches the event loop.
  *

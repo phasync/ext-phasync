@@ -1,11 +1,11 @@
-/* Included by phasync.c (single translation unit); not compiled on its own. */
+/* Included by suspension/unit.c (suspension/'s translation unit); not compiled on its own. */
 
 /* Non-blocking I/O on streams, sockets and pipes: stream/socket/pipe wrapping, stdio and php://input, preadv2()/RWF_NOWAIT, the wrapped-ops machinery shared across socket and pipe originals. */
 
 
 /* ---- fd + wait helpers --------------------------------------------------- */
 
-static php_socket_t phasync_stream_fd(php_stream *stream)
+php_socket_t phasync_stream_fd(php_stream *stream)
 {
 	php_socket_t fd = -1;
 	php_stream_cast(stream, PHP_STREAM_AS_FD_FOR_SELECT | PHP_STREAM_CAST_INTERNAL,
@@ -2565,4 +2565,15 @@ static ZEND_NAMED_FUNCTION(phasync_pclose_override)
 		RETURN_LONG(-1);
 	}
 	PHASYNC_G(orig_pclose)(INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+
+/* issue #42: whether a de-blocked pipe read/write took the preadv2()/pwritev2()
+ * RWF_NOWAIT path, or fell back to toggling O_NONBLOCK. Process-wide, never reset. */
+ZEND_FUNCTION(phasync_ext_io_stats)
+{
+	ZEND_PARSE_PARAMETERS_NONE();
+
+	array_init(return_value);
+	add_assoc_long(return_value, "pipe_nowait", (zend_long) PHASYNC_G(sw_pipe_nowait));
+	add_assoc_long(return_value, "pipe_fcntl_fallback", (zend_long) PHASYNC_G(sw_pipe_fcntl_fallback));
 }

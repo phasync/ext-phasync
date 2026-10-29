@@ -83,7 +83,7 @@
 	X(headers,            SG(sapi_headers)) \
 	X(headers_sent,       SG(headers_sent)) \
 	PHASYNC_REQ_HEADER_CB(X) \
-	X(header_cb,          PHASYNC_G(header_cb)) \
+	X(header_cb,          *phasync_header_cb_slot()) \
 	X(read_post_bytes,    SG(read_post_bytes)) \
 	X(post_read,          SG(post_read)) \
 	X(uploaded_files,     SG(rfc1867_uploaded_files)) \

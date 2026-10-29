@@ -1,4 +1,4 @@
-/* Included by phasync.c (single translation unit); not compiled on its own. */
+/* Included by suspension/unit.c (suspension/'s translation unit); not compiled on its own. */
 
 /* Preemption (Suspension::setPreemptInterval(), checkpoint(), the timer thread, the compile-time checkpoint injection), and the fiber observer settling ledgers. */
 
@@ -658,7 +658,6 @@ static void phasync_op_array_handler(zend_op_array *op_array)
 
 static zend_extension phasync_zend_extension = {
 	.name = "phasync",
-	.version = PHP_PHASYNC_VERSION,
 	.author = "phasync",
 	.op_array_handler = phasync_op_array_handler,
 	.resource_number = -1,
@@ -694,6 +693,7 @@ static void phasync_checkpoint_startup(void)
 	phasync_prev_post_startup_cb = zend_post_startup_cb;
 	zend_post_startup_cb = phasync_checkpoint_hide;
 #endif
+	phasync_zend_extension.version = EG(current_module)->version;
 	zend_register_extension(&phasync_zend_extension, NULL);
 }
 

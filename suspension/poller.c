@@ -1,4 +1,4 @@
-/* Included by phasync.c (single translation unit); not compiled on its own. */
+/* Included by suspension/unit.c (suspension/'s translation unit); not compiled on its own. */
 
 /* The request's poller: epoll/select drivers, registrations, the select()/socket_select() override's shared wait path, inflight tracking. */
 

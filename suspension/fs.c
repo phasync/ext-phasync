@@ -1,4 +1,4 @@
-/* Included by phasync.c (single translation unit); not compiled on its own. */
+/* Included by suspension/unit.c (suspension/'s translation unit); not compiled on its own. */
 
 /* Filesystem functions made cooperative: offloading stat()/file_get_contents()/unlink() and friends to the thread pool when a mount is slow or configured to. */
 

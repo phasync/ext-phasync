@@ -1,14 +1,9 @@
-/* The core extension: its types, module globals and shared prototypes. */
+/* suspension/'s own types, globals and prototypes: private to unit.c's translation unit. */
 #ifndef PHASYNC_INTERNAL_H
 #define PHASYNC_INTERNAL_H
 
-#include "phasync_php.h"
-#include "phasync_arginfo.h"
-#include "ext/filter/php_filter.h"
-#include "main/php_variables.h"
-
-/* statcache.c: this process mutated the file system; the next stat cache lookup drains inotify */
-static bool phasync_sc_own;
+#include "suspension.h"
+#include "suspension_arginfo.h"
 
 
 typedef struct {
@@ -194,11 +189,12 @@ ZEND_BEGIN_MODULE_GLOBALS(phasync)
 	uint64_t sw_pipe_fcntl_fallback; /* ...fell back to the O_NONBLOCK toggle (no RWF_NOWAIT support) */
 ZEND_END_MODULE_GLOBALS(phasync)
 
-ZEND_DECLARE_MODULE_GLOBALS(phasync)
-
 #ifdef ZTS
-# define PHASYNC_G(v) ZEND_MODULE_GLOBALS_ACCESSOR(phasync, v)
+ZEND_TSRMLS_CACHE_EXTERN()
+static ts_rsrc_id phasync_globals_id;
+# define PHASYNC_G(v) ZEND_TSRMG(phasync_globals_id, zend_phasync_globals *, v)
 #else
+static zend_phasync_globals phasync_globals;
 # define PHASYNC_G(v) (phasync_globals.v)
 #endif
 
@@ -219,11 +215,8 @@ static zend_always_inline int phasync_writing(void)
 	return phasync_scope_top() ? PHASYNC_WRITE : 0;
 }
 
-/* ---- types shared across more than one of this extension's own source
- * files (moved here verbatim from their original spot in the pre-split
- * phasync.c); every one of them is still `static`-visibility-free (this
- * extension builds as a single translation unit: phasync.c #includes every
- * other .c file listed here, so nothing needs cross-TU linkage) ---- */
+/* ---- types shared across more than one of suspension/'s source files (unit.c
+ * #includes them all, so nothing here needs cross-TU linkage) ---- */
 
 /* Tri-state result of a wait. */
 #define PHASYNC_WAIT_READY    0    /* ready (or closed/failed) -> retry the op       */
@@ -342,7 +335,6 @@ typedef struct phasync_task {
  * this extension's own source files, used in a file this single-TU build
  * #includes earlier (see phasync.c's own include list and comment) ---- */
 
-static php_socket_t phasync_stream_fd(php_stream *stream);
 static bool phasync_cannot_suspend(void);
 static bool phasync_unwinding(void);
 static bool phasync_op_array_no_preempt(const zend_op_array *op_array);
