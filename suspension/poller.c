@@ -51,7 +51,11 @@ static void phasync_fork_child(void)
 
 static void phasync_reg_dtor(zval *zv)
 {
-	pefree(Z_PTR_P(zv), 1);
+	phasync_reg *r = Z_PTR_P(zv);
+
+	PHASYNC_G(wturns) -= r->turn != NULL;
+	pefree(r->wq, 1);
+	pefree(r, 1);
 }
 
 /* A private kernel queue, itself pollable: readable once any descriptor added
@@ -465,7 +469,63 @@ static void phasync_stream_forget(php_stream *stream)
 				p->armed -= PHASYNC_REG_WAITS(r, i);
 			}
 		}
+		for (uint32_t i = 0; i < r->wq_len; i++) {
+			phasync_chan_push(p->chan, r->wq[i].slot);
+		}
 		phasync_reg_drop(p, r);
+	}
+}
+
+/* ---- the writers queue (see phasync_reg) ---- */
+
+static void phasync_wq_add(phasync_reg *r, zend_long slot, phasync_ledger *l, bool turn, bool front)
+{
+	if (r->wq_len == r->wq_cap) {
+		r->wq_cap = r->wq_cap ? r->wq_cap * 2 : 4;
+		r->wq = perealloc(r->wq, r->wq_cap * sizeof(*r->wq), 1);
+	}
+	uint32_t at = front ? 0 : r->wq_len;
+
+	memmove(r->wq + at + 1, r->wq + at, (r->wq_len - at) * sizeof(*r->wq));
+	r->wq[at] = (phasync_wq_entry) { slot, l, turn };
+	r->wq_len++;
+}
+
+/* Nobody armed and no turn held: the oldest queued writer goes on, a turn waiter
+ * woken as the holder, a readiness waiter armed. */
+static void phasync_wq_advance(phasync_poller *p, phasync_reg *r)
+{
+	phasync_wq_entry e;
+
+	if (r->wq_len == 0 || r->turn || r->slot[1] >= 0) {
+		return;
+	}
+	e = r->wq[0];
+	memmove(r->wq, r->wq + 1, --r->wq_len * sizeof(*r->wq));
+	if (e.turn) {
+		r->turn = e.ledger;
+		PHASYNC_G(wturns)++;
+		phasync_chan_push(p->chan, e.slot);
+		return;
+	}
+	r->slot[1] = e.slot;
+	p->armed++;
+	if (phasync_reg_arm(p, r) != 0) {   /* a regular file: ready at the next poll() */
+		r->slot[1] = -1;
+		p->armed--;
+		phasync_chan_push(p->chan, e.slot);
+	}
+}
+
+/* A write op ends (any way): give up the write turn it holds on the stream. */
+static void phasync_write_turn_end(phasync_poller *p, php_stream *stream, php_socket_t fd)
+{
+	phasync_reg *r = zend_hash_index_find_ptr(&p->regs, (zend_ulong) fd);
+
+	if (r && r->stream == stream && r->turn && r->turn == phasync_ledger_cur()) {
+		r->turn = NULL;
+		PHASYNC_G(wturns)--;
+		phasync_wq_advance(p, r);
 	}
 }
 
@@ -475,7 +535,7 @@ static bool phasync_has_close_hook(php_stream *stream);
  * it, disarm it, and let go of the poller. The stream may have been closed
  * meanwhile (its registration freed): look it up again. */
 static void phasync_wait_settle(phasync_poller *p, int idx, php_stream *stream, php_socket_t fd,
-                                zend_long slot, int dupfd)
+                                zend_long slot, int dupfd, phasync_ledger *l, bool dead)
 {
 	phasync_reg *r = zend_hash_index_find_ptr(&p->regs, (zend_ulong) fd);
 
@@ -486,6 +546,20 @@ static void phasync_wait_settle(phasync_poller *p, int idx, php_stream *stream, 
 		r->slot[idx] = -1;
 		p->armed--;
 		phasync_reg_arm(p, r);
+	} else if (r && idx == 1 && r->wq_len) {
+		for (uint32_t i = 0; i < r->wq_len; i++) {
+			if (r->wq[i].slot == slot) {
+				memmove(r->wq + i, r->wq + i + 1, (--r->wq_len - i) * sizeof(*r->wq));
+				break;
+			}
+		}
+	}
+	if (r && idx == 1) {
+		if (dead && r->turn == l) {   /* its write op will never end */
+			r->turn = NULL;
+			PHASYNC_G(wturns)--;
+		}
+		phasync_wq_advance(p, r);
 	}
 	if (r && r->transient && r->slot[0] < 0 && r->slot[1] < 0) {
 		phasync_reg_drop(p, r);
@@ -786,10 +860,14 @@ static int phasync_wait_inline(php_socket_t fd, int dir, double timeout)
 static int phasync_poller_wait(phasync_poller *p, int dir, php_stream *stream, php_socket_t fd,
                                double timeout, bool via_loop)
 {
-	int idx = dir == PHASYNC_WRITE, rc, dupfd = -1;
+	int turn = dir & (PHASYNC_TURN | PHASYNC_TURNQ), idx, rc, dupfd = -1;
 	phasync_reg *r;
-	phasync_ledger *l;
+	phasync_ledger *l = NULL;
 	zend_long slot;
+	bool queued = false;
+
+	dir &= PHASYNC_READ | PHASYNC_WRITE;
+	idx = dir == PHASYNC_WRITE;
 
 	if (!phasync_poller_usable(p)) {
 		return PHASYNC_WAIT_ERROR;
@@ -800,9 +878,12 @@ static int phasync_poller_wait(phasync_poller *p, int dir, php_stream *stream, p
 		return PHASYNC_WAIT_ERROR;
 	}
 	if (phasync_from_c()) {
-		return phasync_wait_inline(fd, dir, timeout);
+		return turn & PHASYNC_TURNQ ? PHASYNC_WAIT_READY : phasync_wait_inline(fd, dir, timeout);
 	}
 	r = zend_hash_index_find_ptr(&p->regs, (zend_ulong) fd);
+	if ((turn & PHASYNC_TURNQ) && (r == NULL || r->stream != stream || r->turn == NULL || r->turn == phasync_ledger_cur())) {
+		return PHASYNC_WAIT_READY;
+	}
 	if (r && stream && r->stream && r->stream != stream) {
 		if (r->hooked) {
 			/* The other stream's close op never deregistered it: a bug in the
@@ -838,7 +919,7 @@ static int phasync_poller_wait(phasync_poller *p, int dir, php_stream *stream, p
 			phasync_poller_use_epoll(p);
 		}
 	}
-	if (r->slot[idx] >= 0) {
+	if (r->slot[idx] >= 0 && (idx == 0 || (r->watch & 2))) {
 		zend_throw_exception_ex(spl_ce_LogicException, 0, "Another coroutine is already waiting to %s this stream",
 			idx ? "write to" : "read from");
 		rc = PHASYNC_WAIT_ERROR;
@@ -848,6 +929,30 @@ static int phasync_poller_wait(phasync_poller *p, int dir, php_stream *stream, p
 	if ((slot = phasync_get_slot(p)) < 0) {
 		rc = PHASYNC_WAIT_ERROR;
 		goto done;
+	}
+	if (idx == 1) {
+		/* Writers queue. One alone sits in slot[1], at no cost. */
+		if (turn & PHASYNC_TURNQ) {
+			queued = true;
+		} else if (turn) {
+			l = phasync_ledger_cur();
+			if (r->turn != l) {                    /* the op's first wait: it takes the turn, ahead of any waiter */
+				r->turn = l;
+				PHASYNC_G(wturns)++;
+				if (r->slot[1] >= 0) {
+					phasync_wq_add(r, r->slot[1], NULL, false, true);
+					r->slot[1] = -1;
+					p->armed--;
+				}
+			}
+		} else if (r->turn || r->slot[1] >= 0 || r->wq_len) {
+			queued = true;
+		}
+		if (queued) {
+			l = phasync_ledger_cur();
+			phasync_wq_add(r, slot, l, turn & PHASYNC_TURNQ, false);
+			goto park;
+		}
 	}
 	r->slot[idx] = slot;
 	p->armed++;
@@ -868,7 +973,9 @@ static int phasync_poller_wait(phasync_poller *p, int dir, php_stream *stream, p
 
 park:
 	p->refs++;                           /* a fork()ed child may replace it while we wait */
-	l = phasync_ledger_cur();
+	if (l == NULL) {
+		l = phasync_ledger_cur();
+	}
 	l->wait_p = p;
 	l->wait_stream = stream;
 	l->wait_fd = fd;
@@ -877,7 +984,7 @@ park:
 	l->wait_slot = slot;
 	rc = phasync_park(p, slot, timeout);
 	l->wait_p = NULL;
-	phasync_wait_settle(p, idx, stream, fd, slot, dupfd);
+	phasync_wait_settle(p, idx, stream, fd, slot, dupfd, l, false);
 	return rc;
 done:
 	if (r && r->transient && r->slot[0] < 0 && r->slot[1] < 0) {

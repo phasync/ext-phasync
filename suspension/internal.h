@@ -102,6 +102,7 @@ typedef struct phasync_scope {
 struct phasync_preempt;
 
 ZEND_BEGIN_MODULE_GLOBALS(phasync)
+	uint32_t wturns;              /* write turns held (a write op starts without a lookup when 0) */
 	struct phasync_preempt *preempt; /* Suspension::setPreemptInterval()'s timer, NULL = none */
 	zval *preempt_due;            /* phasync\ext\__PREEMPT_DUE's value: true = a checkpoint calls */
 	struct phasync_susp **susp;   /* the Suspension pool; an index is a wait's slot */
@@ -206,6 +207,8 @@ static zend_phasync_globals phasync_globals;
  * (PHASYNC_READ / PHASYNC_WRITE) under one. */
 #define PHASYNC_READ   1
 #define PHASYNC_WRITE  2
+#define PHASYNC_TURN   4   /* with WRITE: a write op's wait; it holds the stream's write turn from here to its end */
+#define PHASYNC_TURNQ  8   /* with WRITE: wait until no other write op holds the turn (no readiness) */
 
 static phasync_scope *phasync_scope_top(void);
 
@@ -236,6 +239,12 @@ typedef struct {
 } phasync_chan;
 
 typedef struct {
+	zend_long slot;           /* the parked waiter's slot                        */
+	struct phasync_ledger *ledger;   /* its coroutine; for a turn waiter           */
+	bool      turn;           /* waits for the write turn, not for readiness     */
+} phasync_wq_entry;
+
+typedef struct {
 	php_socket_t fd;
 	php_stream  *stream;      /* owner; NULL for a bare descriptor               */
 	zend_long    slot[2];     /* parked reader [0] and writer [1]; -1 = nobody   */
@@ -245,6 +254,12 @@ typedef struct {
 	bool         transient;   /* for the current wait only (a bare descriptor)   */
 	bool         hooked;      /* the stream's close op deregisters it            */
 	uint8_t      watch;       /* bit idx: slot[idx] is a stream_select() close watch, not a wait */
+	/* More than one writer: slot[1] is the one armed, the others wait in wq (FIFO, malloc'd on
+	 * the second writer). turn: the coroutine in the middle of a blocking write op, which no
+	 * other write starts under; slot[1] is then only ever its own. */
+	struct phasync_ledger *turn;
+	phasync_wq_entry *wq;
+	uint32_t     wq_len, wq_cap;
 } phasync_reg;
 /* slot[i] waits for readiness (a close watch only waits for a close). */
 #define PHASYNC_REG_WAITS(r, i) ((r)->slot[i] >= 0 && !((r)->watch & (1 << (i))))
@@ -263,7 +278,7 @@ typedef struct phasync_poller {
 	uint32_t      refs;     /* the request + each waiter (a fork()ed child's old one: its waiters) */
 } phasync_poller;
 
-typedef struct {
+typedef struct phasync_ledger {
 	phasync_poller *wait_p;       /* parked on a registration of it (a reference): */
 	php_stream     *wait_stream;
 	php_socket_t    wait_fd;
