@@ -426,14 +426,26 @@ static zend_always_inline bool phasync_susp_ready(const phasync_susp *s)
 }
 
 /* Mark what timed out among these (and the members of nested polls) ready; the earliest
- * remaining deadline into *next. True if any of them is ready. */
-static bool phasync_susp_scan(HashTable *ht, double now, double *next, int depth)
+ * remaining deadline into *next. True if any of them is ready. With out (the top level,
+ * Suspension::poll()'s own array), the ready ones are added to it under their keys, so one
+ * walk does it all: a walk that finds none ready adds nothing. A non-Suspension in it throws
+ * (false, nothing added). */
+static bool phasync_susp_scan(HashTable *ht, double now, double *next, int depth, zval *out)
 {
+	zend_string *key;
+	zend_ulong h;
 	zval *zv;
 	bool any = false;
 
-	ZEND_HASH_FOREACH_VAL(ht, zv) {
-		phasync_susp *s = phasync_susp_from(Z_OBJ_P(zv));
+	ZEND_HASH_FOREACH_KEY_VAL(ht, h, key, zv) {
+		phasync_susp *s;
+		if (out && (Z_TYPE_P(zv) != IS_OBJECT || Z_OBJCE_P(zv) != phasync_suspension_ce)) {
+			zend_argument_type_error(1, "must contain only phasync\\ext\\Suspension objects, %s given", zend_zval_value_name(zv));
+			zval_ptr_dtor(out);
+			ZVAL_EMPTY_ARRAY(out);
+			return false;
+		}
+		s = phasync_susp_from(Z_OBJ_P(zv));
 		if (s->state == PHASYNC_S_PENDING) {
 			if (s->deadline <= now) {
 				s->state = PHASYNC_S_READY;
@@ -443,12 +455,25 @@ static bool phasync_susp_scan(HashTable *ht, double now, double *next, int depth
 					*next = s->deadline;
 				}
 				if (!Z_ISUNDEF(s->members) && depth < 32
-				 && phasync_susp_scan(Z_ARRVAL(s->members), now, next, depth + 1)) {
+				 && phasync_susp_scan(Z_ARRVAL(s->members), now, next, depth + 1, NULL)) {
 					s->state = PHASYNC_S_READY;   /* a nested poll has something ready */
 				}
 			}
 		}
-		any = any || phasync_susp_ready(s);
+		if (phasync_susp_ready(s)) {
+			any = true;
+			if (out) {
+				if (Z_ARR_P(out) == &zend_empty_array) {
+					array_init(out);
+				}
+				Z_ADDREF_P(zv);
+				if (key) {
+					zend_hash_update(Z_ARRVAL_P(out), key, zv);
+				} else {
+					zend_hash_index_update(Z_ARRVAL_P(out), h, zv);
+				}
+			}
+		}
 	} ZEND_HASH_FOREACH_END();
 	return any;
 }
@@ -487,21 +512,11 @@ ZEND_METHOD(phasync_ext_Suspension, poll)
 	HashTable *ht;
 	double seconds, now, end, next;
 	phasync_poller *p;
-	zend_string *key;
-	zend_ulong h;
-	zval *zv;
 
 	ZEND_PARSE_PARAMETERS_START(2, 2)
 		Z_PARAM_ARRAY_HT(ht)
 		Z_PARAM_DOUBLE(seconds)
 	ZEND_PARSE_PARAMETERS_END();
-
-	ZEND_HASH_FOREACH_VAL(ht, zv) {
-		if (Z_TYPE_P(zv) != IS_OBJECT || Z_OBJCE_P(zv) != phasync_suspension_ce) {
-			zend_argument_type_error(1, "must contain only phasync\\ext\\Suspension objects, %s given", zend_zval_value_name(zv));
-			RETURN_THROWS();
-		}
-	} ZEND_HASH_FOREACH_END();
 
 	RETVAL_EMPTY_ARRAY();   /* the usual answer of a busy loop's poll(): nothing to allocate */
 	phasync_holds_release();   /* closers kept alive while others were inside an op on their stream */
@@ -524,9 +539,12 @@ ZEND_METHOD(phasync_ext_Suspension, poll)
 	now = phasync_now();
 	end = seconds < 0 ? INFINITY : now + seconds;
 	next = end;
-	while (!phasync_susp_scan(ht, now, &next, 0)) {
+	while (!phasync_susp_scan(ht, now, &next, 0, return_value)) {
 		zend_fiber *m;
 
+		if (EG(exception)) {
+			RETURN_THROWS();
+		}
 		if (seconds == 0 || now >= end) {
 			break;
 		}
@@ -548,25 +566,14 @@ ZEND_METHOD(phasync_ext_Suspension, poll)
 				RETURN_THROWS();
 			}
 			if (rc > 0) {
-				break;   /* a signal: return to the loop, as stream_select() does */
+				/* a signal: return to the loop, as stream_select() does, with what the wait woke */
+				phasync_susp_scan(ht, phasync_now(), &next, 0, return_value);
+				break;
 			}
 		}
 		now = phasync_now();
 		next = end;
 	}
-	ZEND_HASH_FOREACH_KEY_VAL(ht, h, key, zv) {
-		if (phasync_susp_ready(phasync_susp_from(Z_OBJ_P(zv)))) {
-			if (Z_ARR_P(return_value) == &zend_empty_array) {
-				array_init(return_value);
-			}
-			Z_ADDREF_P(zv);
-			if (key) {
-				zend_hash_update(Z_ARRVAL_P(return_value), key, zv);
-			} else {
-				zend_hash_index_update(Z_ARRVAL_P(return_value), h, zv);
-			}
-		}
-	} ZEND_HASH_FOREACH_END();
 }
 
 /* ---- the other methods -------------------------------------------------------------- */
