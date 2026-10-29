@@ -647,13 +647,19 @@ static int phasync_req_header_handler(sapi_header_struct *h, sapi_header_op_enum
 
 /* ---- connection_aborted(), connection_status() ---- */
 
-/* A server may know the client left before any write fails. */
+/* A server may know the client left before any write fails. Once sapi() has returned,
+ * the response is complete and the connection is no longer the request's: a fiber of
+ * the request still running sees it aborted (its output is discarded already). */
 static void phasync_req_ask_aborted(void)
 {
 	phasync_request *r = phasync_req_cur;
 	zval rv;
 
-	if (r && r->m_connection_aborted && !r->ended && !(PG(connection_status) & PHP_CONNECTION_ABORTED)) {
+	if (r && r->ended) {
+		PG(connection_status) |= PHP_CONNECTION_ABORTED;
+		return;
+	}
+	if (r && r->m_connection_aborted && !(PG(connection_status) & PHP_CONNECTION_ABORTED)) {
 		phasync_req_call(r, r->m_connection_aborted, &rv, 0, NULL);
 		if (zend_is_true(&rv)) {
 			PG(connection_status) |= PHP_CONNECTION_ABORTED;
