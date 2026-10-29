@@ -45,7 +45,7 @@ $scope->run($run, $scope);
 // 3. sapi() inside host-created scopes: output stays per sapi() call.
 $serve = function (Scope $sc, string $who) {
     $s = new Sink;
-    $f = $sc->run(fn() => new Fiber(function () use ($sc, $who, $s) {
+    $f = new Fiber($sc->bind(function () use ($sc, $who, $s) {
         sapi(function () use ($sc, $who) {
             echo "$who:1";
             Fiber::suspend();

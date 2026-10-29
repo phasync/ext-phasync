@@ -390,9 +390,9 @@ the coroutine, the extension `pthread_cancel`s the thread stuck in `open()`
 
 `\Scope` (the Scope RFC) identifies one logical operation. `$scope->run($callable, ...$args)` runs a
 callable in the scope; `Scope::getCurrent()` and `Scope::getRootScope()` return the current and the
-root scope. A `Fiber` belongs to the scope that is current when it is constructed and a `Generator`
-to the one current when it is created (`Fiber::getScope()`, `Generator::getScope()`); their code runs
-in it wherever it is resumed from.
+root scope. A `Fiber` runs in the scope that is current when it is started (`start()`), and a
+`Generator` in the one current when it is created (`Generator::getScope()`); their code runs in it
+wherever it is resumed from.
 
 `Scope` itself is [fiber-interop/ext-scope](https://github.com/fiber-interop/ext-scope), bundled as is
 inside `phasync.so`. If a standalone `scope` extension is already loaded, or a future PHP already has

@@ -93,7 +93,7 @@ final class Suspension extends \Exception
 
     /**
      * The scope current at the blocking call: the one the fiber continues in when
-     * it is resumed (Fiber::getScope() is the scope it belongs to). Error without
+     * it is resumed (the fiber started in the scope current at its start()). Error without
      * the Scope class, or once it was resumed.
      */
     public function getScope(): \Scope {}
