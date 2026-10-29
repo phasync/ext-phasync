@@ -1,7 +1,8 @@
 name: ext-scope is current
 
-# scope/ is a git subtree of fiber-interop/ext-scope. This fails when ext-scope has a newer tag, so
-# an update is never missed: git subtree pull --prefix=scope https://github.com/fiber-interop/ext-scope.git <tag> --squash
+# scope/ is a git subtree of fiber-interop/ext-scope. Between releases main follows ext-scope's main
+# (a release pins ext-scope's tag of that commit). This fails when ext-scope's main has moved, so an
+# update is never missed: git subtree pull --prefix=scope https://github.com/fiber-interop/ext-scope.git main --squash
 on:
   push:
     branches: [main]
@@ -20,12 +21,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: scope/ is at ext-scope's latest tag
+      - name: scope/ is at ext-scope's main
         run: |
           split=$(git log -1 --grep='^git-subtree-dir: scope$' --format=%B | sed -n 's/^git-subtree-split: //p')
-          read -r sha tag < <(git ls-remote --tags --sort=-v:refname https://github.com/fiber-interop/ext-scope.git 'v*' | grep '\^{}$' | head -1)
-          tag=${tag#refs/tags/}; tag=${tag%^{\}}
+          sha=$(git ls-remote https://github.com/fiber-interop/ext-scope.git refs/heads/main | cut -f1)
           if [ "$split" != "$sha" ]; then
-            echo "::error::scope/ is at ${split:-?}, ext-scope's latest tag is $tag ($sha): git subtree pull --prefix=scope https://github.com/fiber-interop/ext-scope.git $tag --squash"
+            echo "::error::scope/ is at ${split:-?}, ext-scope's main is $sha: git subtree pull --prefix=scope https://github.com/fiber-interop/ext-scope.git main --squash"
             exit 1
           fi
