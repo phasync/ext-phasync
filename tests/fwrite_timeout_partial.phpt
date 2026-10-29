@@ -2,6 +2,8 @@
 fwrite() on a blocking socket that times out after a partial write returns what was written after one timeout, with PHP's one notice, as natively
 --EXTENSIONS--
 phasync
+--SKIPIF--
+<?php if (PHP_OS_FAMILY === "Darwin") die("skip natively a blocking fwrite() to a peer that never reads blocks in send() past the stream timeout on macOS, so there is nothing to match"); ?>
 --FILE--
 <?php
 require __DIR__ . '/loop.inc';
@@ -13,7 +15,7 @@ function observe(): array
     stream_set_timeout($client, 0, 300000);
     $notices = [];
     set_error_handler(function (int $code, string $message) use (&$notices) {
-        $notices[] = preg_replace('/\d+ bytes/', 'N bytes', $message);
+        $notices[] = preg_replace(['/\d+ bytes/', '/errno=\d+/'], ['N bytes', 'errno=N'], $message);
         return true;
     });
     $t = microtime(true);
@@ -43,7 +45,7 @@ array(4) {
   ["notices"]=>
   array(1) {
     [0]=>
-    string(79) "fwrite(): Send of N bytes failed with errno=11 Resource temporarily unavailable"
+    string(78) "fwrite(): Send of N bytes failed with errno=N Resource temporarily unavailable"
   }
   ["one wait"]=>
   bool(true)

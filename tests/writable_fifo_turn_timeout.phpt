@@ -13,7 +13,7 @@ $peer   = stream_socket_accept($server);   // never reads
 stream_set_timeout($client, 0, 300000);
 $log = [];
 set_error_handler(function (int $code, string $message) use (&$log) {
-    $log[] = 'notice: ' . preg_replace('/\d+ bytes/', 'N bytes', $message);
+    $log[] = 'notice: ' . preg_replace(['/\d+ bytes/', '/errno=\d+/'], ['N bytes', 'errno=N'], $message);
     return true;
 });
 (new Loop)->runAll(
@@ -30,7 +30,7 @@ set_error_handler(function (int $code, string $message) use (&$log) {
 echo implode("\n", $log), "\n";
 ?>
 --EXPECT--
-notice: fwrite(): Send of N bytes failed with errno=11 Resource temporarily unavailable
+notice: fwrite(): Send of N bytes failed with errno=N Resource temporarily unavailable
 second: false, timed_out: true
-notice: fwrite(): Send of N bytes failed with errno=11 Resource temporarily unavailable
+notice: fwrite(): Send of N bytes failed with errno=N Resource temporarily unavailable
 first: partial
