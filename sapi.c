@@ -870,16 +870,33 @@ static void phasync_req_register_server(zval *track_vars_array)
 			continue;
 		}
 		str = zval_get_string(v);
-		{
+		if (!sapi_module.input_filter || sapi_module.input_filter == php_default_input_filter) {
+			zval z;
+			ZVAL_STR(&z, str);             /* shared, not copied: PHP's own registration takes it */
+			php_register_variable_ex(ZSTR_VAL(key), &z, track_vars_array);
+		} else if (phasync_if && phasync_if->default_filter == 0x0204 /* FILTER_UNSAFE_RAW */) {
+			/* What ext/filter's input filter does with a $_SERVER value under unsafe_raw
+			 * (it ignores the flags then): the raw value into its own array, for
+			 * filter_input(), and the same value into $_SERVER. It copies both; this
+			 * shares the given string (ext-phasync#20). */
+			zval z;
+			if (Z_ISUNDEF(phasync_if->server_array)) {
+				array_init(&phasync_if->server_array);
+			}
+			ZVAL_STR_COPY(&z, str);
+			php_register_variable_ex(ZSTR_VAL(key), &z, &phasync_if->server_array);
+			ZVAL_STR(&z, str);
+			php_register_variable_ex(ZSTR_VAL(key), &z, track_vars_array);
+		} else {
 			char *val = estrndup(ZSTR_VAL(str), ZSTR_LEN(str));
 			size_t len = ZSTR_LEN(str);
 
-			if (!sapi_module.input_filter || sapi_module.input_filter(PARSE_SERVER, ZSTR_VAL(key), &val, len, &len)) {
+			if (sapi_module.input_filter(PARSE_SERVER, ZSTR_VAL(key), &val, len, &len)) {
 				php_register_variable_safe(ZSTR_VAL(key), val, len, track_vars_array);
 			}
 			efree(val);
+			zend_string_release(str);
 		}
-		zend_string_release(str);
 	} ZEND_HASH_FOREACH_END();
 }
 
