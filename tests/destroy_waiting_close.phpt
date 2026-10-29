@@ -4,6 +4,8 @@ A coroutine destroyed while another closes the stream it waits on lets the close
 phasync
 --SKIPIF--
 <?php if (!class_exists('Fiber')) die('skip requires Fibers'); ?>
+--INI--
+phasync.gc_grace=0
 --FILE--
 <?php
 require __DIR__ . '/destroy.inc';
