@@ -44,6 +44,6 @@ Why a list at all: PHP already has to survive a callback doing anything to userl
 
 ## Adding or removing an entry
 
-Add a case to `phasync_never_cfunc()` (C functions) or `phasync_never_callback()` (user frames) in poller.c, and a `tests/c_invoked_never_*.phpt` proving it runs inline. To take one off, implement its mitigation, move its test to `tests/c_invoked_allowed_*.phpt`, and delete the entry. A new PHP extension or engine callback defaults to "may suspend": when a PHP version adds one that keeps global state across the call, it needs an entry.
+Add a case to `phasync_never_cfunc()` (C functions) or `phasync_never_callback()` (user frames) in suspension/poller.c, and a `tests/c_invoked_never_*.phpt` proving it runs inline. To take one off, implement its mitigation, move its test to `tests/c_invoked_allowed_*.phpt`, and delete the entry. A new PHP extension or engine callback defaults to "may suspend": when a PHP version adds one that keeps global state across the call, it needs an entry.
 
 Not covered by tests here (entries coded from the php-src reading): SOAP, LDAP rebind, readline completion, the OpenSSL renegotiation callback.
