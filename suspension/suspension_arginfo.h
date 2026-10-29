@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 7a47cc8785188c45a7c9cafb3d2810c849c6d5e1 */
+ * Stub hash: e042ddbe77bc0ac7df6dc42a7f8294cf0f74f535 */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_phasync_ext_Suspension_setPreemptInterval, 0, 1, IS_VOID, 0)
 	ZEND_ARG_TYPE_INFO(0, seconds, IS_DOUBLE, 1)
