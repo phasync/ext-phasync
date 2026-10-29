@@ -276,6 +276,7 @@ typedef struct {
 
 typedef struct {
 	uint32_t        waiters;      /* coroutines suspended in an op on the stream */
+	uint32_t        readers;      /* of them, in a read (one at most)            */
 	bool            closing;      /* a close woke them; ops on it fail (EBADF)   */
 	phasync_poller *closer;       /* where the closer is parked (NULL: none), and its slot */
 	zend_long       closer_slot;

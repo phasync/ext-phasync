@@ -398,15 +398,37 @@ static bool phasync_close_if_unwinding(php_stream *stream)
  * closes it meanwhile. There is no concurrency cap: every hooked wait goes on
  * this same cooperative path, so a stream whose readiness depends on a SIBLING
  * coroutine of the same worker can never be starved by this one. */
+/* Another coroutine is suspended reading the stream: throw (one reader at a time). */
+static bool phasync_read_busy(php_stream *stream)
+{
+	phasync_inflight *f = zend_hash_index_find_ptr(&PHASYNC_G(inflight), (zend_ulong) (uintptr_t) stream);
+
+	if (f && f->readers) {
+		zend_throw_exception(spl_ce_LogicException, "Concurrent operations on the same resource are not supported", 0);
+		return true;
+	}
+	return false;
+}
+
 static int phasync_wait_fd(int dir, php_stream *stream, php_socket_t fd, double timeout)
 {
 	phasync_scope *s = phasync_scope_top();
+	phasync_inflight *f = NULL;
 	int rc;
 
+	if (stream != NULL && dir == PHASYNC_READ && phasync_read_busy(stream)) {
+		return PHASYNC_WAIT_ERROR;
+	}
 	if (stream != NULL && !phasync_inflight_enter(stream)) {
 		return PHASYNC_WAIT_CLOSED;
 	}
+	if (stream != NULL && dir == PHASYNC_READ) {
+		(f = zend_hash_index_find_ptr(&PHASYNC_G(inflight), (zend_ulong) (uintptr_t) stream))->readers++;
+	}
 	rc = phasync_poller_wait(s->poller, dir, stream, fd, timeout, false);
+	if (f) {
+		f->readers--;
+	}
 	if (stream == NULL) {
 		return rc;
 	}
@@ -645,6 +667,9 @@ static ssize_t phasync_wrapped_read(php_stream *stream, char *buf, size_t count)
 	if (flags == -1 || (flags & O_NONBLOCK) || !dir) {
 		return orig->read(stream, buf, count);
 	}
+	if (phasync_read_busy(stream)) {
+		return -1;
+	}
 	is_sock = phasync_sock_data(stream) != NULL;
 	double deadline = -1;              /* per op call = per fill */
 	for (;;) {
@@ -753,6 +778,9 @@ static ssize_t phasync_wrapped_read_tls(php_stream *stream, char *buf, size_t co
 
 	if (flags == -1 || (flags & O_NONBLOCK) || !dir) {
 		return orig->read(stream, buf, count);
+	}
+	if (phasync_read_busy(stream)) {
+		return -1;
 	}
 	double deadline = -1;              /* per op call = per fill */
 	if (orig->set_option) {
