@@ -738,9 +738,20 @@ static bool phasync_never_suspend(const zend_execute_data *ex, bool preempt)
 		if (preempt && phasync_op_array_no_preempt(&ex->func->op_array)) {
 			return true;
 		}
-		if ((ZEND_CALL_INFO(ex) & ZEND_CALL_TOP) && !(ZEND_CALL_INFO(ex) & ZEND_CALL_GENERATOR)
-		 && phasync_never_callback(ex, prev, prev && prev != bottom && prev->func && ZEND_USER_CODE(prev->func->type) ? prev : NULL)) {
-			return true;
+		if ((ZEND_CALL_INFO(ex) & ZEND_CALL_TOP) && !(ZEND_CALL_INFO(ex) & ZEND_CALL_GENERATOR)) {
+			const zend_execute_data *from = prev;
+
+			/* A closure from Scope::bind() runs its function from a C frame of the same name
+			 * and class that only calls it: judge the call by what called that frame (#101). */
+			if (from && from != bottom && from->func && !ZEND_USER_CODE(from->func->type)
+			 && from->func->common.function_name && ex->func->common.function_name
+			 && zend_string_equals(from->func->common.function_name, ex->func->common.function_name)
+			 && from->func->common.scope == ex->func->common.scope) {
+				from = from->prev_execute_data;
+			}
+			if (phasync_never_callback(ex, from, from && from != bottom && from->func && ZEND_USER_CODE(from->func->type) ? from : NULL)) {
+				return true;
+			}
 		}
 		if (preempt && !prev) {
 			return ex->func->op_array.function_name != NULL;
