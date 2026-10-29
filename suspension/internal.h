@@ -103,6 +103,7 @@ struct phasync_preempt;
 
 ZEND_BEGIN_MODULE_GLOBALS(phasync)
 	uint32_t wturns;              /* write turns held (a write op starts without a lookup when 0) */
+	php_stream *write_cut;        /* io.c: the stream whose write was cut short by a timeout or error */
 	struct phasync_preempt *preempt; /* Suspension::setPreemptInterval()'s timer, NULL = none */
 	zval *preempt_due;            /* phasync\ext\__PREEMPT_DUE's value: true = a checkpoint calls */
 	struct phasync_susp **susp;   /* the Suspension pool; an index is a wait's slot */

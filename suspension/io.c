@@ -718,6 +718,13 @@ static ssize_t phasync_wrapped_write(php_stream *stream, const char *buf, size_t
 	if (flags == -1 || (flags & O_NONBLOCK) || !dir) {
 		return orig->write(stream, buf, count);
 	}
+	/* The stream layer calls again at once for the rest of a write cut short below: answer
+	 * that call as the native op's second call does after its one wait, without a wait of
+	 * its own, so fwrite() returns what was written after one timeout, not two. */
+	if (PHASYNC_G(write_cut) == stream) {
+		PHASYNC_G(write_cut) = NULL;
+		return -1;
+	}
 	is_sock = phasync_sock_data(stream) != NULL;
 	double deadline = -1;              /* per fill */
 	/* The whole buffer is written under the stream's write turn, as a blocking write is
@@ -765,6 +772,9 @@ static ssize_t phasync_wrapped_write(php_stream *stream, const char *buf, size_t
 	}
 	if (turned) {
 		phasync_write_turn_end(phasync_scope_top()->poller, stream, fd);
+	}
+	if (done > 0 && done < count && !EG(exception)) {
+		PHASYNC_G(write_cut) = stream;
 	}
 	return done == count || (done > 0 && !EG(exception)) ? (ssize_t) done : -1;
 }
