@@ -731,7 +731,12 @@ static ssize_t phasync_wrapped_write(php_stream *stream, const char *buf, size_t
 	 * natively: another coroutine's bytes never land in between. */
 	if (PHASYNC_G(wturns)) {
 		turned = true;
-		if (phasync_cooperate(dir | PHASYNC_TURNQ, stream, fd, &deadline) != PHASYNC_COOP_RETRY) {
+		int c = phasync_cooperate(dir | PHASYNC_TURNQ, stream, fd, &deadline);
+
+		if (c != PHASYNC_COOP_RETRY) {
+			if (c == PHASYNC_COOP_TIMEOUT) {   /* the wait for the turn is the write's wait */
+				phasync_write_timeout_notice(stream, count, EAGAIN);
+			}
 			phasync_write_turn_end(phasync_scope_top()->poller, stream, fd);
 			return -1;
 		}
@@ -894,7 +899,12 @@ static ssize_t phasync_wrapped_write_tls(php_stream *stream, const char *buf, si
 	 * after a partial write, the rest is a new write. */
 	if (PHASYNC_G(wturns)) {
 		turned = true;
-		if (phasync_cooperate(dir | PHASYNC_TURNQ, stream, fd, &deadline) != PHASYNC_COOP_RETRY) {
+		int c = phasync_cooperate(dir | PHASYNC_TURNQ, stream, fd, &deadline);
+
+		if (c != PHASYNC_COOP_RETRY) {
+			if (c == PHASYNC_COOP_TIMEOUT) {   /* the wait for the turn is the write's wait */
+				phasync_write_timeout_notice(stream, count, EAGAIN);
+			}
 			phasync_write_turn_end(phasync_scope_top()->poller, stream, fd);
 			return -1;
 		}
