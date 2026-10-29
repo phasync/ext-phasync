@@ -161,6 +161,7 @@ ZEND_BEGIN_MODULE_GLOBALS(phasync)
 	HashTable sock_hooks;         /* (uintptr_t)function_name -> index in phasync_sock_funcs */
 	HashTable conn_hooks;         /* functions on a connection routed through phasync_conn_call() */
 	HashTable conn_busy;          /* connection -> the fiber context in a call on it */
+	HashTable tls_coop;           /* io.c: TLS stream -> its cooperative ops in progress (it is non-blocking meanwhile) */
 	phasync_spawn *spawn;         /* armed by an exec-family call until its pipe is seen */
 	bool ub_writing;              /* a fiber is suspended inside an echo (CLI stdout) */
 	zif_handler orig_fs[PHASYNC_FS_NFUNCS];

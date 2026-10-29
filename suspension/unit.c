@@ -83,6 +83,7 @@ static void phasync_globals_ctor(zend_phasync_globals *phasync_globals)
 	zend_hash_init(&phasync_globals->sock_hooks, 8, NULL, NULL, 1);
 	zend_hash_init(&phasync_globals->conn_hooks, 64, NULL, NULL, 1);
 	zend_hash_init(&phasync_globals->conn_busy, 8, NULL, NULL, 1);
+	zend_hash_init(&phasync_globals->tls_coop, 8, NULL, NULL, 1);
 	phasync_globals->mountinfo_fd = -1;
 }
 
@@ -96,6 +97,7 @@ static void phasync_globals_dtor(zend_phasync_globals *phasync_globals)
 	zend_hash_destroy(&phasync_globals->sock_hooks);
 	zend_hash_destroy(&phasync_globals->conn_hooks);
 	zend_hash_destroy(&phasync_globals->conn_busy);
+	zend_hash_destroy(&phasync_globals->tls_coop);
 	for (int i = 0; i < phasync_globals->nmounts; i++) {
 		free(phasync_globals->mounts[i].path);
 	}
@@ -250,6 +252,7 @@ void phasync_susp_request_startup(int module_number)
 	zend_hash_clean(&PHASYNC_G(hooked));
 	zend_hash_clean(&PHASYNC_G(inflight));
 	zend_hash_clean(&PHASYNC_G(conn_busy));   /* left by a bailout */
+	zend_hash_clean(&PHASYNC_G(tls_coop));
 	PHASYNC_G(write_cut) = NULL;
 	PHASYNC_G(holds) = 0;
 	/* Always-on: the transport factories and function overrides go in at the

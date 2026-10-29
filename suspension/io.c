@@ -799,6 +799,43 @@ static zend_always_inline php_socket_t phasync_tls_fd(php_stream *stream)
 	return ((php_netstream_data_t *) stream->abstract)->socket;
 }
 
+/* A cooperative TLS op makes the descriptor non-blocking for OpenSSL while it runs, and
+ * may suspend meanwhile. Other coroutines' ops on the stream must still treat it as the
+ * blocking stream it is (or they would run native, non-blocking, inside the other's
+ * pending SSL_write()), and only the last op to finish makes it blocking again.
+ * phasync_tls_enter(): false for a stream that is really non-blocking. */
+static bool phasync_tls_enter(php_stream *stream, const php_stream_ops *orig, int flags)
+{
+	zval *c = zend_hash_index_find(&PHASYNC_G(tls_coop), (zend_ulong) (uintptr_t) stream);
+
+	if (c) {
+		Z_LVAL_P(c)++;
+		return true;
+	}
+	if (flags & O_NONBLOCK) {
+		return false;
+	}
+	zval one;
+	ZVAL_LONG(&one, 1);
+	zend_hash_index_add_new(&PHASYNC_G(tls_coop), (zend_ulong) (uintptr_t) stream, &one);
+	if (orig->set_option) {
+		orig->set_option(stream, PHP_STREAM_OPTION_BLOCKING, 0, NULL);
+	}
+	return true;
+}
+
+static void phasync_tls_leave(php_stream *stream, const php_stream_ops *orig)
+{
+	zval *c = zend_hash_index_find(&PHASYNC_G(tls_coop), (zend_ulong) (uintptr_t) stream);
+
+	if (c && --Z_LVAL_P(c) == 0) {
+		zend_hash_index_del(&PHASYNC_G(tls_coop), (zend_ulong) (uintptr_t) stream);
+		if (orig->set_option) {
+			orig->set_option(stream, PHP_STREAM_OPTION_BLOCKING, 1, NULL);
+		}
+	}
+}
+
 static ssize_t phasync_wrapped_read_tls(php_stream *stream, char *buf, size_t count)
 {
 	const php_stream_ops *orig = PHASYNC_ORIG(stream);
@@ -807,16 +844,16 @@ static ssize_t phasync_wrapped_read_tls(php_stream *stream, char *buf, size_t co
 	int flags = phasync_fd_flags(fd);
 	ssize_t n;
 
-	if (flags == -1 || (flags & O_NONBLOCK) || !dir) {
+	if (flags == -1 || !dir) {
 		return orig->read(stream, buf, count);
 	}
 	if (phasync_read_busy(stream)) {
 		return -1;
 	}
-	double deadline = -1;              /* per op call = per fill */
-	if (orig->set_option) {
-		orig->set_option(stream, PHP_STREAM_OPTION_BLOCKING, 0, NULL);
+	if (!phasync_tls_enter(stream, orig, flags)) {
+		return orig->read(stream, buf, count);
 	}
+	double deadline = -1;              /* per op call = per fill */
 	for (;;) {
 		n = orig->read(stream, buf, count);
 		if (n > 0 || n < 0 || stream->eof) {
@@ -828,9 +865,7 @@ static ssize_t phasync_wrapped_read_tls(php_stream *stream, char *buf, size_t co
 			break;
 		}
 	}
-	if (orig->set_option) {
-		orig->set_option(stream, PHP_STREAM_OPTION_BLOCKING, 1, NULL);
-	}
+	phasync_tls_leave(stream, orig);
 	return n;
 }
 
@@ -842,28 +877,58 @@ static ssize_t phasync_wrapped_write_tls(php_stream *stream, const char *buf, si
 	int flags = phasync_fd_flags(fd);
 	ssize_t n;
 
-	if (flags == -1 || (flags & O_NONBLOCK) || !dir) {
+	size_t done = 0;
+	bool turned = false;
+
+	if (flags == -1 || !dir || ((flags & O_NONBLOCK)
+	 && !zend_hash_index_exists(&PHASYNC_G(tls_coop), (zend_ulong) (uintptr_t) stream))) {
 		return orig->write(stream, buf, count);
 	}
-	double deadline = -1;              /* per op call = per fill */
-	if (orig->set_option) {
-		orig->set_option(stream, PHP_STREAM_OPTION_BLOCKING, 0, NULL);
+	if (PHASYNC_G(write_cut) == stream) {   /* see phasync_wrapped_write() */
+		PHASYNC_G(write_cut) = NULL;
+		return -1;
 	}
+	double deadline = -1;              /* per fill */
+	/* As phasync_wrapped_write(): the whole buffer under the stream's write turn. After a
+	 * would-block, OpenSSL is retried with the same buffer and length, as it requires;
+	 * after a partial write, the rest is a new write. */
+	if (PHASYNC_G(wturns)) {
+		turned = true;
+		if (phasync_cooperate(dir | PHASYNC_TURNQ, stream, fd, &deadline) != PHASYNC_COOP_RETRY) {
+			phasync_write_turn_end(phasync_scope_top()->poller, stream, fd);
+			return -1;
+		}
+		deadline = -1;
+	}
+	phasync_tls_enter(stream, orig, flags);
 	for (;;) {
-		n = orig->write(stream, buf, count);
-		if (n > 0 || n < 0) {
+		n = orig->write(stream, buf + done, count - done);
+		if (n > 0) {
+			done += n;
+			if (done == count) {
+				break;
+			}
+			deadline = -1;
+			continue;
+		}
+		if (n < 0) {
 			break;
 		}
 		fd = phasync_tls_fd(stream);  /* 0 -> would block */
-		if (fd == -1 || phasync_cooperate(dir, stream, fd, &deadline) != PHASYNC_COOP_RETRY) {
+		turned = true;
+		if (fd == -1 || phasync_cooperate(dir | PHASYNC_TURN, stream, fd, &deadline) != PHASYNC_COOP_RETRY) {
 			n = -1;
 			break;
 		}
 	}
-	if (orig->set_option) {
-		orig->set_option(stream, PHP_STREAM_OPTION_BLOCKING, 1, NULL);
+	phasync_tls_leave(stream, orig);
+	if (turned) {
+		phasync_write_turn_end(phasync_scope_top()->poller, stream, phasync_tls_fd(stream));
 	}
-	return n;
+	if (done > 0 && done < count && !EG(exception)) {
+		PHASYNC_G(write_cut) = stream;
+	}
+	return done == count || (done > 0 && !EG(exception)) ? (ssize_t) done : n;
 }
 
 /* Delegate a set_option call to the original ops. xport ops (bind/connect/listen/

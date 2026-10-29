@@ -446,6 +446,8 @@ static void phasync_stream_forget(php_stream *stream)
 {
 	php_socket_t fd = -2;
 
+	zend_hash_index_del(&PHASYNC_G(tls_coop), (zend_ulong) (uintptr_t) stream);
+
 	if (stream == PHASYNC_G(fs_last)) {
 		PHASYNC_G(fs_last) = NULL;
 	}
