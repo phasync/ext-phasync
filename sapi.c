@@ -146,6 +146,7 @@ typedef struct phasync_request {
 	bool prebody_all;                  /* ...all of it */
 	php_stream *body_seen;             /* the body stream read_post() last filled... */
 	HashTable *bodies_replaced;        /* ...and earlier ones PHP replaced */
+	bool scope_owns_session;           /* a Scope other than the root is current: it, not this struct, carries $_SESSION across switches */
 } phasync_request;
 
 #define PHASYNC_REQ_KEY(ctx) ((zend_ulong) (uintptr_t) (ctx))
@@ -174,6 +175,43 @@ static zend_always_inline phasync_request *phasync_req_of(zend_fiber_context *ct
 {
 	return zend_hash_index_find_ptr(&phasync_req_fibers, PHASYNC_REQ_KEY(ctx));
 }
+
+#ifdef PHASYNC_HAVE_SESSION
+/* Whether ext-scope is itself moving $_SESSION (and the rest of ext/session's live state)
+ * across fiber switches for the scope sapi() is called in: with scope.session on (the
+ * default) and a Scope other than the root current, the Scope's own switch does this already
+ * (scope_sess_swap(), the bundled ext-scope's own, no different from a standalone build's), on
+ * the same fiber-switch notification as phasync_req_install() below -- a request's own save/load
+ * of the same live fields, right alongside it, only has the wrong, already-moved values to save
+ * and load, undoing the Scope's correct swap (swerve#108). Checked and cached once: "scope"'s
+ * class entry and scope.session are both fixed for the process once MINIT has run. */
+static zend_class_entry *phasync_scope_ce;
+static bool phasync_scope_sess_on;
+static bool phasync_scope_checked;
+
+static bool phasync_scope_owns_session(void)
+{
+	zval cur, root;
+	bool owns;
+
+	if (!phasync_scope_checked) {
+		zend_ini_entry *e = zend_hash_str_find_ptr(EG(ini_directives), ZEND_STRL("scope.session"));
+
+		phasync_scope_ce = zend_hash_str_find_ptr(CG(class_table), ZEND_STRL("scope"));
+		phasync_scope_sess_on = e && zend_ini_parse_bool(e->value);
+		phasync_scope_checked = true;
+	}
+	if (!phasync_ps || !phasync_scope_sess_on || !phasync_scope_ce) {
+		return false;
+	}
+	zend_call_method_with_0_params(NULL, phasync_scope_ce, NULL, "getcurrent", &cur);
+	zend_call_method_with_0_params(NULL, phasync_scope_ce, NULL, "getrootscope", &root);
+	owns = Z_OBJ(cur) != Z_OBJ(root);
+	zval_ptr_dtor(&cur);
+	zval_ptr_dtor(&root);
+	return owns;
+}
+#endif
 
 /* ---- installing a request: its globals swapped in for the process's or another's ---- */
 
@@ -212,7 +250,7 @@ static void phasync_req_install(phasync_request *in)
 	}
 
 #ifdef PHASYNC_HAVE_SESSION
-	if (phasync_ps) {
+	if (phasync_ps && !((out && out->scope_owns_session) || (in && in->scope_owns_session))) {
 		st = out ? &out->st : &phasync_req_root;
 #define PHASYNC_REQ_SESSION_SAVE(name, live) st->name = live;
 		PHASYNC_REQ_SESSION_FIELDS(PHASYNC_REQ_SESSION_SAVE)
@@ -1011,6 +1049,9 @@ ZEND_FUNCTION(phasync_ext_sapi)
 		RETURN_THROWS();
 	}
 	r = ecalloc(1, sizeof(*r));
+#ifdef PHASYNC_HAVE_SESSION
+	r->scope_owns_session = phasync_scope_owns_session();
+#endif
 	r->m_write = m_write;
 	r->m_read = PHASYNC_REQ_METHOD("read");
 	r->m_send_headers = PHASYNC_REQ_METHOD("send_headers");
