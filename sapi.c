@@ -158,6 +158,88 @@ static phasync_req_state phasync_req_root;
 static HashTable phasync_req_fibers;               /* fiber context -> its request */
 static uint32_t phasync_req_count;                 /* requests alive */
 
+/* The CLI's own globals a web-shaped request must not see: STDIN/STDOUT/STDERR (the CLI SAPI's
+ * constants, recreated every run_next() lifecycle) and $argc/$argv (register_argc_argv()'s,
+ * plain entries in EG(symbol_table): ordinary globals, outside the per-Scope superglobal swap
+ * and everything else this file already isolates per request). Every request wants them gone
+ * the same way; nothing to swap between two different requests, so they are saved once, at the
+ * root<->request boundary (phasync_req_cur becoming or stopping being NULL), not per request. */
+static zend_constant *phasync_cli_const[3];        /* STDIN, STDOUT, STDERR while hidden */
+static zval phasync_cli_argc, phasync_cli_argv;    /* while hidden; UNDEF: wasn't set */
+
+/* Caveat: a literal defined('STDIN'/'STDOUT'/'STDERR') compiles to a ZEND_DEFINED opcode with a
+ * per-call-site cache slot that, once it resolves true, never rechecks EG(zend_constants) again
+ * (PHP assumes constants are add-only). The same call site must therefore stay on one side of
+ * the boundary -- always inside a request, or always outside -- never both; app code (isPHPCLI()
+ * and the like) only ever runs inside one, so this holds in practice. */
+
+static void phasync_req_hide_cli(void)
+{
+	static const char *const names[3] = { "STDIN", "STDOUT", "STDERR" };
+	static const size_t lens[3] = { 5, 6, 6 };
+	dtor_func_t dtor = EG(zend_constants)->pDestructor;
+
+	EG(zend_constants)->pDestructor = NULL;
+	for (int i = 0; i < 3; i++) {
+		if ((phasync_cli_const[i] = zend_hash_str_find_ptr(EG(zend_constants), names[i], lens[i]))) {
+			zend_hash_str_del(EG(zend_constants), names[i], lens[i]);
+		}
+	}
+	EG(zend_constants)->pDestructor = dtor;
+
+	/* $argc/$argv: the key is never deleted, only its value swapped to NULL in place (matching
+	 * what a global that was never set looks like, isset()-wise -- see phasync_req_restore_cli()).
+	 * A del+re-add here (even via the same "null the dtor" idiom used above and elsewhere, e.g.
+	 * phasync_memo_touch()) measurably corrupted an unrelated interleaved request's $_SESSION
+	 * (ext-phasync#24): EG(symbol_table) is live under suspended fibers the whole time a
+	 * request is installed, unlike zend_constants, which nothing holds a raw zval* into across
+	 * a yield. */
+	ZVAL_UNDEF(&phasync_cli_argc);
+	ZVAL_UNDEF(&phasync_cli_argv);
+	{
+		zval *z;
+		if ((z = zend_hash_str_find(&EG(symbol_table), "argc", sizeof("argc") - 1)) && !Z_ISNULL_P(z)) {
+			ZVAL_COPY_VALUE(&phasync_cli_argc, z);
+			ZVAL_NULL(z);
+		}
+		if ((z = zend_hash_str_find(&EG(symbol_table), "argv", sizeof("argv") - 1)) && !Z_ISNULL_P(z)) {
+			ZVAL_COPY_VALUE(&phasync_cli_argv, z);
+			ZVAL_NULL(z);
+		}
+	}
+}
+
+static void phasync_req_restore_cli(void)
+{
+	static const char *const names[3] = { "STDIN", "STDOUT", "STDERR" };
+	static const size_t lens[3] = { 5, 6, 6 };
+
+	for (int i = 0; i < 3; i++) {
+		if (phasync_cli_const[i]) {
+			zend_hash_str_update_ptr(EG(zend_constants), names[i], lens[i], phasync_cli_const[i]);
+			phasync_cli_const[i] = NULL;
+		}
+	}
+	if (!Z_ISUNDEF(phasync_cli_argc)) {
+		zval *z = zend_hash_str_find(&EG(symbol_table), "argc", sizeof("argc") - 1);
+		if (z) {
+			zval old = *z;
+			ZVAL_COPY_VALUE(z, &phasync_cli_argc);
+			zval_ptr_dtor(&old);
+		}
+		ZVAL_UNDEF(&phasync_cli_argc);
+	}
+	if (!Z_ISUNDEF(phasync_cli_argv)) {
+		zval *z = zend_hash_str_find(&EG(symbol_table), "argv", sizeof("argv") - 1);
+		if (z) {
+			zval old = *z;
+			ZVAL_COPY_VALUE(z, &phasync_cli_argv);
+			zval_ptr_dtor(&old);
+		}
+		ZVAL_UNDEF(&phasync_cli_argv);
+	}
+}
+
 static char *phasync_req_cli_name;
 static zval phasync_req_cli_val;
 static int phasync_req_cli_as_text;
@@ -222,6 +304,13 @@ static void phasync_req_install(phasync_request *in)
 
 	if (in == out) {
 		return;
+	}
+	if (!out != !in) {
+		if (in) {
+			phasync_req_hide_cli();   /* entering the first active request */
+		} else {
+			phasync_req_restore_cli();   /* leaving the last one */
+		}
 	}
 	phasync_req_cur = in;
 
