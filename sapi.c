@@ -147,6 +147,7 @@ typedef struct phasync_request {
 	php_stream *body_seen;             /* the body stream read_post() last filled... */
 	HashTable *bodies_replaced;        /* ...and earlier ones PHP replaced */
 	bool scope_owns_session;           /* a Scope other than the root is current: it, not this struct, carries $_SESSION across switches */
+	HashTable *own_globals;            /* names include_global() declared for this request (phasync.c); destroyed at finalize() */
 } phasync_request;
 
 #define PHASYNC_REQ_KEY(ctx) ((zend_ulong) (uintptr_t) (ctx))
@@ -926,9 +927,29 @@ static int phasync_req_shutdown_call(zval *zv)
 	return EG(exception) ? ZEND_HASH_APPLY_STOP : ZEND_HASH_APPLY_KEEP;
 }
 
+/* phasync.c's include_global(): $name is a new top-level variable of the file it just started
+ * running, inside the current request (a no-op outside any). phasync_req_finalize() destroys it
+ * by this name once the request ends -- see there for why only names, never a value diff. */
+static void phasync_req_own_global(zend_string *name)
+{
+	if (!phasync_req_cur) {
+		return;
+	}
+	if (!phasync_req_cur->own_globals) {
+		phasync_req_cur->own_globals = emalloc(sizeof(HashTable));
+		zend_hash_init(phasync_req_cur->own_globals, 8, NULL, NULL, 0);
+	}
+	zend_hash_add_empty_element(phasync_req_cur->own_globals, name);
+}
+
 /* The end of a request, in php_request_shutdown()'s order: its shutdown functions,
- * the output buffers flushed (removable or not), the headers if no output sent
- * them, and its session written and closed. */
+ * then (standing in for zend_call_destructors()) the globals the request's own
+ * include_global() calls declared, destroyed by name so a __destruct() that calls
+ * setcookie()/header() still lands in this response, the output buffers flushed
+ * (removable or not), the headers if no output sent them, and its session written
+ * and closed. Static properties are not swept here: PHP's statics are process-wide,
+ * with no per-request (or per-Scope) provenance to tell this request's write from
+ * another's or the worker's own -- ext-phasync#25 has the reasoning. */
 static void phasync_req_finalize(phasync_request *r)
 {
 	zend_object *ex = EG(exception);
@@ -942,6 +963,31 @@ static void phasync_req_finalize(phasync_request *r)
 				zend_bailout();
 			}
 		} zend_end_try();
+		phasync_req_restore_exception(ex);
+		ex = EG(exception);
+		EG(exception) = NULL;
+	}
+	if (r->own_globals) {
+		zend_try {
+			zend_string *name;
+
+			ZEND_HASH_FOREACH_STR_KEY(r->own_globals, name) {
+				zval *zv = zend_hash_find(&EG(symbol_table), name);
+
+				/* IS_INDIRECT: some other, still-running code bound this name with
+				 * global $name -- not ours alone to destroy right now. */
+				if (zv && Z_TYPE_P(zv) != IS_INDIRECT) {
+					zend_hash_del(&EG(symbol_table), name);
+				}
+			} ZEND_HASH_FOREACH_END();
+		} zend_catch {
+			if (!r->aborted) {
+				zend_bailout();
+			}
+		} zend_end_try();
+		zend_hash_destroy(r->own_globals);
+		efree(r->own_globals);
+		r->own_globals = NULL;
 		phasync_req_restore_exception(ex);
 		ex = EG(exception);
 		EG(exception) = NULL;

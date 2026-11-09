@@ -68,7 +68,14 @@ ZEND_FUNCTION(phasync_ext_include_global)
 
 	/* A frame bound to the global symbol table owns its variables there (IS_INDIRECT to its CVs).
 	 * Binding a second one with a variable of the same name would copy the value into both,
-	 * with nothing to bind the first back afterwards, as require from the top level does. */
+	 * with nothing to bind the first back afterwards, as require from the top level does.
+	 *
+	 * A name that does not exist yet is about to become this call's own -- inside a request,
+	 * phasync_req_own_global() remembers it so phasync_req_finalize() destroys it (running any
+	 * __destruct()) before that request's own output flush and headers, exactly as a fresh
+	 * php-fpm process would when it exits. A name that already exists is left alone either way:
+	 * either it is a real, pre-existing value this call does not own, or (above) still indirectly
+	 * bound by code of this same shared global scope that has not returned yet. */
 	for (uint32_t i = 0; i < op_array->last_var; i++) {
 		zval *zv = zend_hash_find_known_hash(&EG(symbol_table), op_array->vars[i]);
 		if (zv && Z_TYPE_P(zv) == IS_INDIRECT) {
@@ -78,6 +85,9 @@ ZEND_FUNCTION(phasync_ext_include_global)
 			destroy_op_array(op_array);
 			efree_size(op_array, sizeof(zend_op_array));
 			return;
+		}
+		if (!zv) {
+			phasync_req_own_global(op_array->vars[i]);
 		}
 	}
 
