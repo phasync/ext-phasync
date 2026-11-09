@@ -220,16 +220,28 @@ static void phasync_memo_out(zval *dst, zval *src)
 		zend_object *o = zend_objects_new(zend_standard_class_def);
 		HashTable *props = n->t;
 
-		if (props && n->deep) {
+		/* Always a private copy. A zval holding an immutable array is marked
+		 * non-refcounted, so zval_ptr_dtor() never touches its GC_REFCOUNT; but
+		 * object->properties is a plain HashTable* with no such escape -- its
+		 * refcount is a real one, decremented by the object's destructor and by
+		 * the cycle collector visiting it through get_properties(). Two unrelated
+		 * objects sharing this persistent, pemalloc'd table (GC_REFCOUNT fixed at
+		 * 2 by phasync_memo_array()) each decrement it once: the second reaches
+		 * zero and frees a still-shared block (ext-phasync#23). PHP core avoids
+		 * the same trap in zend_cast_zval_to_object(), which dups an immutable
+		 * array before using it as properties, for the identical reason. */
+		if (props) {
 			zval *v;
 			props = zend_array_dup(props);
-			ZEND_HASH_FOREACH_VAL(props, v) {
-				if (Z_TYPE_P(v) == IS_PTR) {
-					phasync_memo_out(v, v);
-				}
-			} ZEND_HASH_FOREACH_END();
+			if (n->deep) {
+				ZEND_HASH_FOREACH_VAL(props, v) {
+					if (Z_TYPE_P(v) == IS_PTR) {
+						phasync_memo_out(v, v);
+					}
+				} ZEND_HASH_FOREACH_END();
+			}
 		}
-		o->properties = props;   /* an immutable one is separated on the first write */
+		o->properties = props;
 		ZVAL_OBJ(dst, o);
 	} else {
 		HashTable *t = zend_array_dup(n->t);
