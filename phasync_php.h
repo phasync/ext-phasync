@@ -3,6 +3,6 @@
 
 #include "suspension/suspension.h"
 
-#define PHP_PHASYNC_VERSION "2.0.8"
+#define PHP_PHASYNC_VERSION "2.0.9"
 
 #endif /* PHASYNC_PHP_H */
