@@ -158,6 +158,57 @@ static phasync_request *phasync_req_cur;           /* installed; NULL: the proce
 static phasync_req_state phasync_req_root;
 static HashTable phasync_req_fibers;               /* fiber context -> its request */
 static uint32_t phasync_req_count;                 /* requests alive */
+static HashTable *phasync_ini_snap;                /* ini values when the first request started (name => string) */
+
+/* php-fpm undoes a request's ini changes; here ini is process-wide, so it is
+ * undone when the last request ends, never while one is running. */
+static void phasync_ini_snapshot(void)
+{
+	zend_string *name;
+	zend_ini_entry *ini;
+	phasync_ini_snap = emalloc(sizeof(HashTable));
+	zend_hash_init(phasync_ini_snap, 8, NULL, ZVAL_PTR_DTOR, 0);
+	if (!EG(modified_ini_directives)) {
+		return;
+	}
+	ZEND_HASH_FOREACH_STR_KEY_PTR(EG(modified_ini_directives), name, ini) {
+		zval v;
+		if (ini->value) {
+			ZVAL_STR_COPY(&v, ini->value);
+		} else {
+			ZVAL_NULL(&v);
+		}
+		zend_hash_add_new(phasync_ini_snap, name, &v);
+	} ZEND_HASH_FOREACH_END();
+}
+
+static void phasync_ini_restore(void)
+{
+	HashTable *snap = phasync_ini_snap;
+	zend_string *name, *cur;
+	zval *v, names;
+	phasync_ini_snap = NULL;
+	array_init(&names);
+	if (EG(modified_ini_directives)) {
+		ZEND_HASH_FOREACH_STR_KEY(EG(modified_ini_directives), name) {
+			if (!zend_hash_exists(snap, name)) {
+				add_next_index_str(&names, zend_string_copy(name));
+			}
+		} ZEND_HASH_FOREACH_END();
+	}
+	ZEND_HASH_FOREACH_VAL(Z_ARRVAL(names), v) {
+		zend_restore_ini_entry(Z_STR_P(v), ZEND_INI_STAGE_RUNTIME);
+	} ZEND_HASH_FOREACH_END();
+	zval_ptr_dtor(&names);
+	ZEND_HASH_FOREACH_STR_KEY_VAL(snap, name, v) {
+		cur = zend_ini_get_value(name);
+		if (Z_TYPE_P(v) == IS_STRING && (!cur || !zend_string_equals(cur, Z_STR_P(v)))) {
+			zend_alter_ini_entry(name, Z_STR_P(v), ZEND_INI_SYSTEM, ZEND_INI_STAGE_RUNTIME);
+		}
+	} ZEND_HASH_FOREACH_END();
+	zend_hash_destroy(snap);
+	efree(snap);
+}
 
 /* The CLI's own globals a web-shaped request must not see: STDIN/STDOUT/STDERR (the CLI SAPI's
  * constants, recreated every run_next() lifecycle) and $argc/$argv (register_argc_argv()'s,
@@ -583,7 +634,9 @@ static void phasync_req_release(phasync_request *r)
 	zval_ptr_dtor(&r->sapi);
 	zend_string_release(r->name);
 	efree(r);
-	phasync_req_count--;
+	if (--phasync_req_count == 0) {
+		phasync_ini_restore();
+	}
 }
 
 /* ---- calling the $sapi object, with the process's own state live ---- */
@@ -1201,7 +1254,9 @@ ZEND_FUNCTION(phasync_ext_sapi)
 	r->refcount = 2;                  /* this call + the calling fiber's membership */
 	ZVAL_COPY(&r->sapi, sapi);
 	phasync_req_state_init(&r->st);
-	phasync_req_count++;
+	if (phasync_req_count++ == 0) {
+		phasync_ini_snapshot();
+	}
 
 	phasync_req_call(r, m_name, &name, 0, NULL);
 	if (!EG(exception) && Z_TYPE(name) != IS_STRING) {
